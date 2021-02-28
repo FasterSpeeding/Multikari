@@ -38,9 +38,11 @@ import importlib.util
 import logging
 import math
 import multiprocessing
+import sys
+import time
 import typing
-from multiprocessing import connection
-from multiprocessing import pool
+import uuid
+from concurrent import futures
 
 from . import models
 from . import slave
@@ -54,6 +56,9 @@ if typing.TYPE_CHECKING:
 
 _LOGGER = logging.getLogger("hikari.multikari")
 _ValueT = typing.TypeVar("_ValueT")
+DEFAULT_PROCESS_SIZE: typing.Final[int] = 1
+DEFAULT_TIMEOUT: typing.Final[float] = 60.0
+TimeoutT = typing.Union[int, float]
 
 
 async def _fetch_gateway_bot(token: str) -> sessions.GatewayBot:
@@ -63,47 +68,97 @@ async def _fetch_gateway_bot(token: str) -> sessions.GatewayBot:
         return await rest_client.fetch_gateway_bot()
 
 
-class _FailedStart(Exception):
-    __slots__: typing.Sequence[str] = ()
-
-    __cause__: Exception
-
-
 class Puppeteer:
-    __slots__: typing.Sequence[str] = ("builder", "_connections", "_lock", "_pool", "_results", "_task", "_token")
+    __slots__: typing.Sequence[str] = (
+        "builder",
+        "_connections",
+        "_lock",
+        "_process_pool",
+        "process_size",
+        "_process_futures",
+        "shard_ids",
+        "shard_count",
+        "_task",
+        "_thread_pool",
+        "_token",
+    )
 
-    def __init__(self, builder: models.BotBuilderProto, token: str, /) -> None:
+    def __init__(
+        self,
+        builder: models.BotBuilderProto,
+        token: str,
+        /,
+        shard_count: int,
+        shard_ids: typing.AbstractSet[int],
+        *,
+        process_size: int = DEFAULT_PROCESS_SIZE,
+    ) -> None:
+        if len(shard_ids) > shard_count:
+            raise ValueError("shard_count must be greater than or equal to the length of shard_ids")
+
+        if process_size <= 0:
+            raise ValueError("process_size must be greater than 1")
+
         self.builder = builder
-        self._connections: typing.List[connection.Connection] = []
-        self._lock = asyncio.Lock()
-        self._pool: typing.Optional[pool.Pool] = None
-        self._results: typing.List[pool.AsyncResult[None]] = []
-        self._task: typing.Optional[asyncio.Task[None]] = None
+        self._connections: typing.List[multiprocessing.connection.Connection] = []
+        self._lock = multiprocessing.Lock()
+        self._process_pool: typing.Optional[futures.ProcessPoolExecutor] = None
+        self.process_size = process_size
+        self._process_futures: typing.List[futures.Future[None]] = []
+        self.shard_count = shard_count
+        self.shard_ids = shard_ids
+        self._task: typing.Optional[futures.Future[None]] = None
+        self._thread_pool: typing.Optional[futures.ThreadPoolExecutor] = None
         self._token = token
 
     @property
     def is_alive(self) -> bool:
-        return self._pool is not None
+        return self._task is not None
 
-    async def _handle_results(self) -> None:
-        tasks = [asyncio.get_event_loop().run_in_executor(None, result.get) for result in self._results]
-        _, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-
-        for task in pending:
-            task.cancel()
-
-        await self.close()
-        return
+    @staticmethod
+    def fetch_shard_stats(token: str, /) -> typing.Tuple[int, typing.AbstractSet[int]]:
+        gateway_bot = asyncio.get_event_loop().run_until_complete(_fetch_gateway_bot(token))
+        return gateway_bot.shard_count, frozenset(range(gateway_bot.shard_count))
 
     @classmethod
-    def from_package(cls, package: str, attribute: str, token: str, /) -> Puppeteer:
-        builder_module = importlib.import_module(package)
-        builder = getattr(builder_module, attribute)
-        assert callable(builder)
-        return Puppeteer(builder, token)
+    def from_package(
+        cls,
+        package: str,
+        attribute: str,
+        token: str,
+        /,
+        shard_count: int,
+        shard_ids: typing.AbstractSet[int],
+        *,
+        process_size: int = DEFAULT_PROCESS_SIZE,
+    ) -> Puppeteer:
+        try:
+            builder_module = importlib.import_module(package)
+
+        except ImportError as exc:
+            raise RuntimeError(f"Couldn't find package {package!r}") from exc
+
+        builder = getattr(builder_module, attribute, None)
+        if builder is None:
+            raise RuntimeError(f"Couldn't find builder {package}:{attribute}")
+
+        if not callable(builder):
+            raise RuntimeError(f"Builder found at {package}:{attribute} isn't callable")
+
+        return Puppeteer(builder, token, shard_count=shard_count, shard_ids=shard_ids, process_size=process_size)
 
     @classmethod
-    def from_path(cls, path: pathlib.Path, attribute: str, token: str, /) -> Puppeteer:
+    def from_path(
+        cls,
+        path: pathlib.Path,
+        attribute: str,
+        token: str,
+        /,
+        shard_count: int,
+        shard_ids: typing.AbstractSet[int],
+        *,
+        process_size: int = DEFAULT_PROCESS_SIZE,
+    ) -> Puppeteer:
         spec = importlib.util.spec_from_file_location(path.name, str(path.absolute()))
         if not spec:
             raise RuntimeError(f"Module not found at path {path}")
@@ -111,129 +166,114 @@ class Puppeteer:
         builder_module = importlib.util.module_from_spec(spec)
         # The typeshed is wrong
         spec.loader.exec_module(builder_module)  # type: ignore[union-attr]
-        builder = getattr(builder_module, attribute, None)
 
-        if not builder:
+        builder = getattr(builder_module, attribute, None)
+        if builder is None:
             raise RuntimeError(f"Builder not found at {path}:{attribute}")
 
         if not callable(builder):
             raise RuntimeError(f"Builder found at {path}:{attribute} is not callable")
 
-        return Puppeteer(builder, token)
+        return Puppeteer(builder, token, shard_count=shard_count, shard_ids=shard_ids, process_size=process_size)
 
-    async def close(self, *, timeout: int = 60) -> None:
-        async with self._lock:
-            if not self._pool:
+    def _keep_alive(self) -> None:
+        try:
+            _, pending = futures.wait(self._process_futures, return_when=futures.FIRST_COMPLETED)
+            for future in pending:
+                future.cancel()
+
+        except KeyboardInterrupt:
+            pass
+
+        self.close()
+        return
+
+    def close(self, *, timeout: TimeoutT = DEFAULT_TIMEOUT) -> None:
+        with self._lock:
+            if not self._task:
                 raise RuntimeError("Cannot close an instance that isn't running")
 
-            for conn in self._connections:
-                conn.send({"type": models.MessageType.CLOSE})
+            self.__close(timeout=timeout)
 
-            # Try to wait for the child processes to end smoothly before slamming the line on them.
-            tasks = [asyncio.get_event_loop().run_in_executor(None, result.get) for result in self._results]
-            _, pending = await asyncio.wait(tasks, timeout=timeout)
+    def __close(self, *, timeout: TimeoutT = DEFAULT_TIMEOUT) -> None:
+        assert self._process_pool is not None
+        assert self._thread_pool is not None
+        for conn in self._connections:
+            conn.send(models.CloseMessage(nonce=uuid.uuid4().bytes))
 
-            for task in pending:
-                task.cancel()
+        # Try to wait for the child processes to end smoothly before slamming the line on them.
+        _, pending = futures.wait(self._process_futures, timeout=timeout)
+        for future in pending:
+            future.cancel()
 
-            self._pool.terminate()
-            self._pool = None
-            self._task = None
+        if sys.version_info.minor >= 9:
+            self._process_pool.shutdown(wait=False, cancel_futures=True)
+            self._thread_pool.shutdown(wait=False, cancel_futures=True)
 
-    async def join(self) -> None:
-        if not self._task:
-            raise RuntimeError("Cannot wait for a client that's never started to join")
+        else:
+            self._process_pool.shutdown(wait=False)
+            self._thread_pool.shutdown(wait=False)
 
-        await self._task
+        self._process_pool = None
+        self._task = None
+        self._thread_pool = None
 
-    def run(
-        self,
-        *,
-        process_size: int = 1,
-        shard_count: typing.Optional[int] = None,
-        shard_ids: typing.Optional[typing.AbstractSet[int]] = None,
-    ) -> None:
-        loop = asyncio.get_event_loop()
-        loop.run_until_complete(self.spawn(process_size=process_size, shard_count=shard_count, shard_ids=shard_ids))
+    def join(self) -> None:
+        with self._lock:
+            if not self._task:
+                raise RuntimeError("Cannot wait for a client that's never started to join")
+
+            task = self._task
+
+        task.result()
+
+    def run(self) -> None:
+        self.spawn()
         assert self._task is not None, "this should've been set by self.spawn"
-        loop.run_until_complete(self.join())
-        # This just gets stuck after returning/raising before reaching wherever this is being called from on Windows and
-        # I don't think there's much I can do about that so...
+        self.join()
 
-    async def spawn(
-        self,
-        *,
-        process_size: int = 1,
-        shard_count: typing.Optional[int] = None,
-        shard_ids: typing.Optional[typing.AbstractSet[int]] = None,
-    ) -> None:
-        async with self._lock:
-            if self._pool:
+    def spawn(self) -> None:
+        with self._lock:
+            if self._task:
                 raise RuntimeError("Cannot spawn an instance that's already running")
 
-            if shard_ids and not shard_count:
-                raise ValueError("shard_count must be passed when shard_ids is passed")
+            self._process_pool = futures.ProcessPoolExecutor(math.ceil(len(self.shard_ids) / self.process_size))
+            self._thread_pool = futures.ThreadPoolExecutor(2)
 
-            elif shard_count and not shard_ids:
-                raise ValueError("shard_ids must be passed when shard_count is passed")
-
-            elif not shard_count and not shard_ids:
-                gateway_bot = await _fetch_gateway_bot(self._token)
-                shard_count = gateway_bot.shard_count
-                shard_ids = set(range(shard_count))
-
-            assert shard_ids is not None
-            assert shard_count is not None
-
-            if len(shard_ids) > shard_count:
-                raise ValueError("shard_count must be greater than or equal to the length of shard_ids")
-
-            if process_size <= 0:
-                raise ValueError("process_size must be greater than 1")
-
-            loop = asyncio.get_event_loop()
-
-            self._pool = pool.Pool(math.ceil(len(shard_ids) / process_size))
             try:
-                for chunk in utilities.chunk_values(shard_ids, process_size):
+                for chunk in utilities.chunk_values(self.shard_ids, self.process_size):
                     our_channel, their_channel = multiprocessing.Pipe()
                     self._connections.append(our_channel)
-                    receive_task = loop.run_in_executor(None, utilities.soft_recv, our_channel.recv)
-                    assert isinstance(receive_task, asyncio.Future), "docs say this is a future"
+                    receive_future = self._thread_pool.submit(utilities.soft_recv, our_channel.recv)
 
-                    _LOGGER.info("Starting shards ")
-                    result = self._pool.apply_async(
-                        slave.process_main, (self.builder, their_channel, shard_count, chunk)
+                    _LOGGER.info("Starting shards")
+                    process_future = self._process_pool.submit(
+                        slave.process_main, self.builder, their_channel, self.shard_count, chunk
                     )
-                    self._results.append(result)
-                    result_task = loop.run_in_executor(None, result.get)
-                    assert isinstance(result_task, asyncio.Future), "docs say this is a future"
 
-                    done, pending = await asyncio.wait((receive_task, result_task), return_when=asyncio.FIRST_COMPLETED)
+                    done, pending = futures.wait((receive_future, process_future), return_when=futures.FIRST_COMPLETED)
 
-                    if result_task in done:
-                        receive_task.cancel()
+                    if process_future in done:
+                        receive_future.cancel()
                         # This should always raise
-                        await result_task
+                        result = process_future.result()
+                        raise RuntimeError(f"Bot instance returned {result} instead of running")
 
-                    result_task.cancel()
-                    message = await receive_task
-                    message_type = message.get("type")
+                    self._process_futures.append(process_future)
+                    message = receive_future.result()
 
-                    if message_type is models.MessageType.CLOSE:
-                        raise _FailedStart from RuntimeError("Startup interrupted")
+                    if isinstance(message, models.CloseMessage):
+                        raise RuntimeError("Startup interrupted")
 
-                    if message_type is not models.MessageType.STARTED:
-                        raise _FailedStart from ValueError(f"Received invalid message type {message_type}")
+                    elif not isinstance(message, models.StartedMessage):
+                        raise ValueError(f"Expected a startup confirmation but got {type(message)}")
 
                     # TODO: we could probably work out if we need to do this each iteration with some maths
                     # This accounts for max concurrency
-                    await asyncio.sleep(5)
+                    time.sleep(5)
 
-            except Exception as exc:
-                await self.close()
-                if isinstance(exc, _FailedStart):
-                    raise exc.__cause__
+            except BaseException:
+                self.__close()
                 raise
 
-            self._task = asyncio.create_task(self._handle_results())
+            self._task = self._thread_pool.submit(self._keep_alive)

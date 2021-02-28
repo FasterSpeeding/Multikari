@@ -54,3 +54,30 @@ class MessageType(int, enum.Enum):
 class BotBuilderProto(typing.Protocol):
     def __call__(self) -> traits.BotAware:
         raise NotImplementedError
+
+
+class BaseMessage:
+    __slots__: typing.Sequence[str] = ("nonce",)
+
+    def __init__(self, *, nonce: bytes) -> None:
+        self.nonce = nonce
+
+
+# class AckMessage(BaseMessage):
+#     __slots__: typing.Sequence[str] = ()
+
+
+class CloseMessage(BaseMessage):
+    __slots__: typing.Sequence[str] = ()
+
+
+class PingMessage(BaseMessage):
+    __slots__: typing.Sequence[str] = ()
+
+
+class PongMessage(BaseMessage):
+    __slots__: typing.Sequence[str] = ()
+
+
+class StartedMessage(BaseMessage):
+    __slots__: typing.Sequence[str] = ()

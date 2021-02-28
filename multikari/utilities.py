@@ -47,7 +47,7 @@ def chunk_values(iterable: typing.Iterable[_ValueT], size: int) -> typing.Iterat
         yield chunk
 
 
-def soft_recv(callback: typing.Callable[[], typing.Dict[str, typing.Any]]) -> typing.Dict[str, typing.Any]:
+def soft_recv(callback: typing.Callable[[], typing.Any]) -> typing.Any:
     try:
         return callback()
 

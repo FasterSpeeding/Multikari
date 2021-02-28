@@ -35,65 +35,78 @@ __all__: typing.Sequence[str] = []
 
 import asyncio
 import logging
+import os
+import sys
 import typing
-from multiprocessing import connection
+import uuid
+from concurrent import futures
 
 from hikari.events import lifetime_events
 
 from . import models
 from . import utilities
 
-_LOGGER = logging.getLogger("hikari.multikari")
+if typing.TYPE_CHECKING:
+    from multiprocessing import connection
+
 _ValueT = typing.TypeVar("_ValueT")
 
 
 async def async_main(
     builder: models.BotBuilderProto, conn: connection.Connection, shard_count: int, shard_ids: typing.AbstractSet[int]
 ) -> None:
-    import asyncio
-
+    logger = logging.getLogger(f"hikari.multikari.{os.getpid()}")
+    thread_pool = futures.ThreadPoolExecutor(1)
     bot = builder()
 
     @bot.event_manager.listen(lifetime_events.StartedEvent)
     async def on_started(_: lifetime_events.StartedEvent) -> None:
-        conn.send({"type": models.MessageType.STARTED})
+        conn.send(models.StartedMessage(nonce=uuid.uuid4().bytes))
         bot.event_manager.unsubscribe(lifetime_events.StartedEvent, on_started)
 
-    loop = asyncio.get_event_loop()
     await bot.start(shard_count=shard_count, shard_ids=shard_ids)
 
     while True:
         try:
-            join_task = loop.create_task(bot.join())
-            conn_task = loop.run_in_executor(None, utilities.soft_recv, conn.recv)
+            join_task = asyncio.create_task(bot.join())
+            conn_future = thread_pool.submit(utilities.soft_recv, conn.recv)
+            conn_task = asyncio.wrap_future(conn_future)
 
             done, pending = await asyncio.wait((join_task, conn_task), return_when=asyncio.FIRST_COMPLETED)
+            for task in pending:
+                task.cancel()
 
-            if conn_task in done:
+            if join_task in done:
+                conn_future.cancel()
+                # TODO: going away message?
+                break
 
-                for task in pending:
-                    task.cancel()
+            message = await conn_task
+            # This check is technically unnecessary thus we only do it as a debugging step.
+            if __debug__ and not isinstance(message, models.BaseMessage):
+                logger.warning("Ignoring invalid message, expected a BaseMessage but got %s", type(message))
 
-                message = await conn_task
-                if not isinstance(message, dict):
-                    raise ValueError(f"Incorrect pipe message received, expected a dict but got {type(message)}")
+            elif isinstance(message, models.CloseMessage):
+                if bot.is_alive:
+                    await bot.close()
 
-                elif not isinstance(message_type := message.get("type"), models.MessageType):
-                    raise ValueError(f"Unrecognised or no message type received: {message_type}")
+                logger.info("Process %r going away", os.getpid())
+                return
 
-                if message_type is models.MessageType.CLOSE:
-                    if bot.is_alive:
-                        await bot.close()
-
-                    return
-
-                else:
-                    raise NotImplementedError(message_type)
+            else:
+                logger.warning("Ignoring unknown message type %s", type(message))
 
         except KeyboardInterrupt:
             if bot.is_alive:
                 await bot.close()
 
+            if sys.version_info.minor >= 9:
+                thread_pool.shutdown(wait=False, cancel_futures=True)
+
+            else:
+                thread_pool.shutdown(wait=False)
+
+            logger.info("Process %r going away", os.getpid())
             raise
 
 
