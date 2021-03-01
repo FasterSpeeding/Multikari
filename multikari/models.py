@@ -36,8 +36,11 @@ __all__: typing.Sequence[str] = ["BotBuilderProto", "MessageType"]
 import enum
 import logging
 import typing
+import uuid
 
 if typing.TYPE_CHECKING:
+    import asyncio
+
     from hikari import traits
 
 
@@ -52,19 +55,29 @@ class MessageType(int, enum.Enum):
 
 
 class BotBuilderProto(typing.Protocol):
-    def __call__(self) -> traits.BotAware:
+    def __call__(self, client: SlaveClientProto, /) -> traits.BotAware:
+        raise NotImplementedError
+
+
+class SlaveClientProto(typing.Protocol):
+    __slots__: typing.Sequence[str] = ()
+
+    def send(self, message: BaseMessage, /) -> asyncio.Future[BaseMessage]:
+        raise NotImplementedError
+
+    def send_no_wait(self, message: BaseMessage, /) -> None:
         raise NotImplementedError
 
 
 class BaseMessage:
     __slots__: typing.Sequence[str] = ("nonce",)
 
-    def __init__(self, *, nonce: bytes) -> None:
-        self.nonce = nonce
+    def __init__(self, *, nonce: typing.Optional[bytes] = None) -> None:
+        self.nonce = nonce or uuid.uuid4().bytes
 
 
-# class AckMessage(BaseMessage):
-#     __slots__: typing.Sequence[str] = ()
+class AckMessage(BaseMessage):
+    __slots__: typing.Sequence[str] = ()
 
 
 class CloseMessage(BaseMessage):

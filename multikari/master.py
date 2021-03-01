@@ -41,7 +41,6 @@ import multiprocessing
 import sys
 import time
 import typing
-import uuid
 from concurrent import futures
 
 from . import models
@@ -71,14 +70,15 @@ async def _fetch_gateway_bot(token: str) -> sessions.GatewayBot:
 class Puppeteer:
     __slots__: typing.Sequence[str] = (
         "builder",
+        "_close_event",
         "_connections",
+        "_future",
         "_lock",
-        "_process_pool",
-        "process_size",
+        "_new_cluster_event",
         "_process_futures",
-        "shard_ids",
-        "shard_count",
-        "_task",
+        "_process_pool",
+        "_process_size",
+        "_shard_stats",
         "_thread_pool",
         "_token",
     )
@@ -100,20 +100,21 @@ class Puppeteer:
             raise ValueError("process_size must be greater than 1")
 
         self.builder = builder
-        self._connections: typing.List[multiprocessing.connection.Connection] = []
+        self._close_event = utilities.Event()
+        self._connections: typing.Dict[typing.FrozenSet[int], multiprocessing.connection.Connection] = {}
+        self._future: typing.Optional[futures.Future[None]] = None
         self._lock = multiprocessing.Lock()
+        self._new_cluster_event = (utilities.Event(), multiprocessing.Lock())
+        self._process_futures: typing.Dict[futures.Future[None], typing.FrozenSet[int]] = {}
         self._process_pool: typing.Optional[futures.ProcessPoolExecutor] = None
-        self.process_size = process_size
-        self._process_futures: typing.List[futures.Future[None]] = []
-        self.shard_count = shard_count
-        self.shard_ids = shard_ids
-        self._task: typing.Optional[futures.Future[None]] = None
+        self._process_size = process_size
+        self._shard_stats = (shard_count, shard_ids)
         self._thread_pool: typing.Optional[futures.ThreadPoolExecutor] = None
         self._token = token
 
     @property
     def is_alive(self) -> bool:
-        return self._task is not None
+        return self._future is not None
 
     @staticmethod
     def fetch_shard_stats(token: str, /) -> typing.Tuple[int, typing.AbstractSet[int]]:
@@ -177,32 +178,91 @@ class Puppeteer:
         return Puppeteer(builder, token, shard_count=shard_count, shard_ids=shard_ids, process_size=process_size)
 
     def _keep_alive(self) -> None:
+        with self._new_cluster_event[1]:
+            process_futures_map = self._process_futures.copy()
+
+        process_futures_set = frozenset(process_futures_map.keys())
+        close_future = self._close_event.future()
+        connections = self._connections.copy()
+        connection_event = utilities.Event()
+        connections_future: typing.Optional[
+            futures.Future[typing.Optional[typing.Iterable[multiprocessing.connection.Connection]]]
+        ] = None
+        new_cluster_future: typing.Optional[futures.Future[typing.Any]] = None
+        assert self._thread_pool is not None
+
         try:
-            _, pending = futures.wait(self._process_futures, return_when=futures.FIRST_COMPLETED)
-            for future in pending:
-                future.cancel()
+            while True:
+                if connections_future is None:
+                    connection_event.clear()
+                    connections_future = self._thread_pool.submit(
+                        utilities.poll_connections, connections.values(), connection_event
+                    )
 
-        except KeyboardInterrupt:
-            pass
+                if new_cluster_future is None:
+                    new_cluster_future = self._new_cluster_event[0].future()
 
-        self.close()
-        return
+                current_futures: typing.Sequence[futures.Future[typing.Any]] = (
+                    close_future,
+                    connections_future,
+                    new_cluster_future,
+                    *process_futures_set,
+                )
+                done, pending = futures.wait(current_futures, return_when=futures.FIRST_COMPLETED)
+
+                if close_future in done:
+                    connection_event.set()
+                    connections_future.cancel()
+                    return
+
+                if connections_future in done:
+                    passed_connections = connections_future.result()
+                    ...  # TODO: stuff
+                    connection_event.set()
+                    connections_future = None
+
+                # TODO: if this happens we should wait for like 5 seconds to see if like 25% of the clusters come down
+                # to guess if it's irrecoverable.
+                finished_processes = ()  # TODO this as well lmao
+
+                if new_cluster_future in done:
+                    with self._new_cluster_event[1]:
+                        process_futures_map = self._process_futures.copy()
+                        process_futures_set = frozenset(self._process_futures)
+                        connections = self._connections.copy()
+                        self._new_cluster_event[0].clear()
+
+                    connections_future = None
+                    new_cluster_future = None
+
+        finally:
+            connection_event.set()
+            close_future.cancel()
+
+            if connections_future:
+                connections_future.cancel()
+
+            if new_cluster_future:
+                new_cluster_future.cancel()
+
+            self.close()
 
     def close(self, *, timeout: TimeoutT = DEFAULT_TIMEOUT) -> None:
         with self._lock:
-            if not self._task:
+            if not self._future:
                 raise RuntimeError("Cannot close an instance that isn't running")
 
             self.__close(timeout=timeout)
 
     def __close(self, *, timeout: TimeoutT = DEFAULT_TIMEOUT) -> None:
+        self._close_event.set()
         assert self._process_pool is not None
         assert self._thread_pool is not None
-        for conn in self._connections:
-            conn.send(models.CloseMessage(nonce=uuid.uuid4().bytes))
+        for conn in self._connections.values():
+            conn.send(models.CloseMessage())
 
         # Try to wait for the child processes to end smoothly before slamming the line on them.
-        _, pending = futures.wait(self._process_futures, timeout=timeout)
+        _, pending = futures.wait(self._process_futures.keys(), timeout=timeout)
         for future in pending:
             future.cancel()
 
@@ -215,65 +275,71 @@ class Puppeteer:
             self._thread_pool.shutdown(wait=False)
 
         self._process_pool = None
-        self._task = None
+        self._future = None
         self._thread_pool = None
 
     def join(self) -> None:
         with self._lock:
-            if not self._task:
-                raise RuntimeError("Cannot wait for a client that's never started to join")
+            if not self._future:
+                raise RuntimeError("Cannot wait for a client that's not started to join")
 
-            task = self._task
+            task = self._future
 
         task.result()
 
     def run(self) -> None:
-        self.spawn()
-        assert self._task is not None, "this should've been set by self.spawn"
+        self.start()
         self.join()
 
-    def spawn(self) -> None:
+    def start(self) -> None:
         with self._lock:
-            if self._task:
-                raise RuntimeError("Cannot spawn an instance that's already running")
+            if self._future:
+                raise RuntimeError("Cannot start an instance that's already running")
 
-            self._process_pool = futures.ProcessPoolExecutor(math.ceil(len(self.shard_ids) / self.process_size))
-            self._thread_pool = futures.ThreadPoolExecutor(2)
+            self._close_event.clear()
+            self._process_pool = futures.ProcessPoolExecutor(math.ceil(len(self._shard_stats[1]) / self._process_size))
+            self._thread_pool = futures.ThreadPoolExecutor(4)
+            self._future = self._thread_pool.submit(self._keep_alive)
 
+            close_receive = utilities.Event()
             try:
-                for chunk in utilities.chunk_values(self.shard_ids, self.process_size):
+                for raw_chunk in utilities.chunk_values(self._shard_stats[1], self._process_size):
+                    chunk = frozenset(raw_chunk)
+                    close_receive.clear()
                     our_channel, their_channel = multiprocessing.Pipe()
-                    self._connections.append(our_channel)
-                    receive_future = self._thread_pool.submit(utilities.soft_recv, our_channel.recv)
+                    self._connections[chunk] = our_channel
+                    receive_future = self._thread_pool.submit(utilities.poll_recv, our_channel, close_receive)
 
                     _LOGGER.info("Starting shards")
                     process_future = self._process_pool.submit(
-                        slave.process_main, self.builder, their_channel, self.shard_count, chunk
+                        slave.process_main, self.builder, their_channel, self._shard_stats[0], chunk
                     )
 
-                    done, pending = futures.wait((receive_future, process_future), return_when=futures.FIRST_COMPLETED)
+                    current_futures: typing.Sequence[futures.Future[typing.Any]] = (receive_future, process_future)
+                    done, pending = futures.wait(current_futures, return_when=futures.FIRST_COMPLETED)
 
                     if process_future in done:
-                        receive_future.cancel()
-                        # This should always raise
+                        # This result call is expected to always raise.
                         result = process_future.result()
                         raise RuntimeError(f"Bot instance returned {result} instead of running")
 
-                    self._process_futures.append(process_future)
                     message = receive_future.result()
-
                     if isinstance(message, models.CloseMessage):
                         raise RuntimeError("Startup interrupted")
 
                     elif not isinstance(message, models.StartedMessage):
                         raise ValueError(f"Expected a startup confirmation but got {type(message)}")
 
+                    with self._new_cluster_event[1]:
+                        self._process_futures[process_future] = chunk
+                        self._new_cluster_event[0].set()
+
                     # TODO: we could probably work out if we need to do this each iteration with some maths
                     # This accounts for max concurrency
                     time.sleep(5)
 
             except BaseException:
+                close_receive.set()
+                receive_future.cancel()
                 self.__close()
                 raise
-
-            self._task = self._thread_pool.submit(self._keep_alive)

@@ -36,9 +36,8 @@ __all__: typing.Sequence[str] = []
 import asyncio
 import logging
 import os
-import sys
 import typing
-import uuid
+import weakref
 from concurrent import futures
 
 from hikari.events import lifetime_events
@@ -49,65 +48,126 @@ from . import utilities
 if typing.TYPE_CHECKING:
     from multiprocessing import connection
 
+    from hikari import traits
+
 _ValueT = typing.TypeVar("_ValueT")
 
 
-async def async_main(
-    builder: models.BotBuilderProto, conn: connection.Connection, shard_count: int, shard_ids: typing.AbstractSet[int]
-) -> None:
-    logger = logging.getLogger(f"hikari.multikari.{os.getpid()}")
-    thread_pool = futures.ThreadPoolExecutor(1)
-    bot = builder()
+class Client(models.SlaveClientProto):
+    __slots__: typing.Sequence[str] = ("_close_event", "_connection", "_future", "_logger", "_message_futures")
 
-    @bot.event_manager.listen(lifetime_events.StartedEvent)
-    async def on_started(_: lifetime_events.StartedEvent) -> None:
-        conn.send(models.StartedMessage(nonce=uuid.uuid4().bytes))
-        bot.event_manager.unsubscribe(lifetime_events.StartedEvent, on_started)
+    def __init__(self, conn: connection.Connection) -> None:
+        self._close_event = asyncio.Event()
+        self._connection = conn
+        self._future: typing.Optional[asyncio.Future[None]] = None
+        self._kill_event = asyncio.Event()
+        self._logger = logging.getLogger(f"hikari.multikari.{os.getpid()}")
+        self._message_futures: weakref.WeakValueDictionary[
+            bytes, asyncio.Future[models.BaseMessage]
+        ] = weakref.WeakValueDictionary()
 
-    await bot.start(shard_count=shard_count, shard_ids=shard_ids)
+    @property
+    def is_alive(self) -> bool:
+        return self._future is not None
 
-    while True:
+    def close(self) -> None:
+        self._close_event.set()
+
+    async def join(self) -> None:
+        if not self._future:
+            raise RuntimeError("Cannot join a client that hasn't started")
+
+        await self._future
+
+    async def _keep_alive(self, bot: traits.BotAware) -> None:
+        close_event = asyncio.create_task(self._close_event.wait())
+        conn_event = utilities.Event()
+        conn_future: typing.Optional[futures.Future[typing.Any]] = None
+        conn_task: typing.Optional[asyncio.Future[typing.Any]] = None
+        join_task = asyncio.create_task(bot.join())
+
         try:
-            join_task = asyncio.create_task(bot.join())
-            conn_future = thread_pool.submit(utilities.soft_recv, conn.recv)
-            conn_task = asyncio.wrap_future(conn_future)
+            with futures.ThreadPoolExecutor(1) as thread_pool:
+                conn_event.clear()
+                conn_future = thread_pool.submit(utilities.poll_recv, self._connection, conn_event)
+                conn_task = asyncio.wrap_future(conn_future)
 
-            done, pending = await asyncio.wait((join_task, conn_task), return_when=asyncio.FIRST_COMPLETED)
-            for task in pending:
-                task.cancel()
+                while True:
+                    current_futures = (join_task, conn_task, close_event)
+                    done, pending = await asyncio.wait(current_futures, return_when=asyncio.FIRST_COMPLETED)
 
-            if join_task in done:
-                conn_future.cancel()
-                # TODO: going away message?
-                break
+                    if close_event in done or join_task in done:
+                        # TODO: going away message?
+                        break
 
-            message = await conn_task
-            # This check is technically unnecessary thus we only do it as a debugging step.
-            if __debug__ and not isinstance(message, models.BaseMessage):
-                logger.warning("Ignoring invalid message, expected a BaseMessage but got %s", type(message))
+                    message = await conn_task
+                    if not isinstance(message, models.BaseMessage):
+                        self._logger.warning(
+                            "Ignoring invalid message, expected a BaseMessage but got %s", type(message)
+                        )
 
-            elif isinstance(message, models.CloseMessage):
-                if bot.is_alive:
-                    await bot.close()
+                    else:
+                        if message_future := self._message_futures.pop(message.nonce, None):
+                            message_future.set_result(message)
 
-                logger.info("Process %r going away", os.getpid())
-                return
+                        if isinstance(message, models.CloseMessage):
+                            self._logger.info("Process %r going away", os.getpid())
+                            break
 
-            else:
-                logger.warning("Ignoring unknown message type %s", type(message))
+                        else:
+                            self._logger.warning("Ignoring unexpected message type %s", type(message))
 
-        except KeyboardInterrupt:
+                    conn_future = thread_pool.submit(utilities.poll_recv, self._connection, conn_event)
+                    conn_task = asyncio.wrap_future(conn_future)
+
+        finally:
+            close_event.cancel()
+            conn_event.set()
+            join_task.cancel()
             if bot.is_alive:
                 await bot.close()
 
-            if sys.version_info.minor >= 9:
-                thread_pool.shutdown(wait=False, cancel_futures=True)
+            if conn_future is not None:
+                conn_future.cancel()
 
-            else:
-                thread_pool.shutdown(wait=False)
+            if conn_task is not None:
+                conn_task.cancel()
 
-            logger.info("Process %r going away", os.getpid())
+            self._logger.info("Process %r going away", os.getpid())
             raise
+
+    def run(self, bot: traits.BotAware, shard_count: int, shard_ids: typing.AbstractSet[int]) -> None:
+        loop = asyncio.get_event_loop()
+        loop.run_until_complete(self.start(bot, shard_count, shard_ids))
+        loop.run_until_complete(self.join())
+
+    async def start(self, bot: traits.BotAware, shard_count: int, shard_ids: typing.AbstractSet[int]) -> None:
+        if self._future:
+            raise RuntimeError("Cannot start a client that's already running")
+
+        if bot.is_alive:
+            raise RuntimeError("Cannot start with a bot that's already running")
+
+        @bot.event_manager.listen(lifetime_events.StartedEvent)
+        async def on_started(_: lifetime_events.StartedEvent) -> None:
+            self._connection.send(models.StartedMessage())
+            bot.event_manager.unsubscribe(lifetime_events.StartedEvent, on_started)
+
+        await bot.start(shard_count=shard_count, shard_ids=shard_ids)
+        self._close_event.clear()
+        self._future = asyncio.create_task(self._keep_alive(bot))
+
+    def send(self, message: models.BaseMessage, /) -> asyncio.Future[models.BaseMessage]:
+        self.send_no_wait(message)
+        future: asyncio.Future[models.BaseMessage] = asyncio.Future()
+        self._message_futures[message.nonce] = future
+        return future
+
+    def send_no_wait(self, message: models.BaseMessage, /) -> None:
+        if not self._future:
+            raise RuntimeError("Cannot send on a client that isn't running")
+
+        self._connection.send(message)
 
 
 # TODO: support a string for the builder
@@ -118,7 +178,8 @@ def process_main(
     shard_ids: typing.AbstractSet[int],
 ) -> None:
     try:
-        asyncio.run(async_main(builder, conn, shard_count, shard_ids))
+        cli = Client(conn)
+        cli.run(builder(cli), shard_count=shard_count, shard_ids=shard_ids)
 
     # We only want to see these on the master process otherwise this gets really spammy
     except KeyboardInterrupt:

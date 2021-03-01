@@ -34,22 +34,91 @@ from __future__ import annotations
 __all__: typing.Sequence[str] = []
 
 import itertools
+import threading
 import typing
+import weakref
+from concurrent import futures
+from multiprocessing import connection
 
 from . import models
 
 _ValueT = typing.TypeVar("_ValueT")
+RECV_TIMEOUT: typing.Final[float] = 0.5
 
 
-def chunk_values(iterable: typing.Iterable[_ValueT], size: int) -> typing.Iterator[typing.Tuple[_ValueT, ...]]:
+class Event:
+    __slots__: typing.Sequence[str] = ("_flag", "_futures", "_lock")
+
+    def __init__(self) -> None:
+        self._flag = False
+        self._futures: weakref.WeakSet[futures.Future[None]] = weakref.WeakSet()
+        self._lock = threading.Lock()
+
+    def is_set(self) -> bool:
+        return self._flag
+
+    def set(self) -> None:
+        with self._lock:
+            future: futures.Future[None]
+            for future in self._futures:
+                try:
+                    future.set_result(None)
+
+                except futures.InvalidStateError:
+                    pass
+
+            self._futures.clear()
+            self._flag = True
+
+    def clear(self) -> None:
+        with self._lock:
+            self._flag = False
+
+    def future(self) -> futures.Future[None]:
+        with self._lock:
+            future: futures.Future[None] = futures.Future()
+
+            if self._flag:
+                future.set_result(None)
+
+            else:
+                self._futures.add(future)
+
+            return future
+
+
+def chunk_values(iterable: typing.Iterable[_ValueT], size: int) -> typing.Iterator[typing.Sequence[_ValueT]]:
     iterator = iter(iterable)
     while chunk := tuple(itertools.islice(iterator, size)):
         yield chunk
 
 
-def soft_recv(callback: typing.Callable[[], typing.Any]) -> typing.Any:
+def poll_recv(conn: connection.Connection, event: Event) -> typing.Optional[typing.Any]:
+    event_future = event.future()
     try:
-        return callback()
+        while True:
+            if conn.poll(timeout=RECV_TIMEOUT):
+                return conn.recv()
+
+            if event_future.done():
+                return None
 
     except EOFError:
-        return {"type": models.MessageType.CLOSE}
+        return models.CloseMessage()
+
+
+def poll_connections(
+    connections: typing.Sequence[connection.Connection], event: Event
+) -> typing.Sequence[connection.Connection]:
+    event_future = event.future()
+    try:
+        while True:
+            if conns := connection.wait(connections, timeout=RECV_TIMEOUT):
+                return typing.cast("typing.Sequence[connection.Connection]", conns)
+
+            if event_future.done():
+                return []
+
+    # TODO: how to handle this here?
+    except EOFError:
+        return []
