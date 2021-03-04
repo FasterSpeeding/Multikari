@@ -39,8 +39,6 @@ import typing
 import uuid
 
 if typing.TYPE_CHECKING:
-    import asyncio
-
     from hikari import traits
 
 
@@ -62,10 +60,7 @@ class BotBuilderProto(typing.Protocol):
 class SlaveClientProto(typing.Protocol):
     __slots__: typing.Sequence[str] = ()
 
-    def send(self, message: BaseMessage, /) -> asyncio.Future[BaseMessage]:
-        raise NotImplementedError
-
-    def send_no_wait(self, message: BaseMessage, /) -> None:
+    def shutdown(self) -> None:
         raise NotImplementedError
 
 
@@ -76,20 +71,24 @@ class BaseMessage:
         self.nonce = nonce or uuid.uuid4().bytes
 
 
-class AckMessage(BaseMessage):
-    __slots__: typing.Sequence[str] = ()
-
-
 class CloseMessage(BaseMessage):
     __slots__: typing.Sequence[str] = ()
 
 
 class PingMessage(BaseMessage):
-    __slots__: typing.Sequence[str] = ()
+    __slots__: typing.Sequence[str] = ("shard_id",)
+
+    def __init__(self, shard_id: int, /) -> None:
+        super().__init__()
+        self.shard_id = shard_id
 
 
 class PongMessage(BaseMessage):
-    __slots__: typing.Sequence[str] = ()
+    __slots__: typing.Sequence[str] = ("shard_id",)
+
+    def __init__(self, nonce: bytes, shard_id: int, /) -> None:
+        super().__init__(nonce=nonce)
+        self.shard_id = shard_id
 
 
 class StartedMessage(BaseMessage):

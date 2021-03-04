@@ -72,6 +72,10 @@ class Event:
 
     def clear(self) -> None:
         with self._lock:
+            for future in self._futures:
+                future.cancel()
+
+            self._futures.clear()
             self._flag = False
 
     def future(self) -> futures.Future[None]:

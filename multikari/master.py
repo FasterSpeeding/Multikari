@@ -31,7 +31,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 from __future__ import annotations
 
-__all__: typing.Sequence[str] = ["Puppeteer"]
+__all__: typing.Sequence[str] = ["Master"]
 
 import asyncio
 import importlib.util
@@ -67,7 +67,7 @@ async def _fetch_gateway_bot(token: str) -> sessions.GatewayBot:
         return await rest_client.fetch_gateway_bot()
 
 
-class Puppeteer:
+class Master:
     __slots__: typing.Sequence[str] = (
         "builder",
         "_close_event",
@@ -132,7 +132,7 @@ class Puppeteer:
         shard_ids: typing.AbstractSet[int],
         *,
         process_size: int = DEFAULT_PROCESS_SIZE,
-    ) -> Puppeteer:
+    ) -> Master:
         try:
             builder_module = importlib.import_module(package)
 
@@ -146,7 +146,7 @@ class Puppeteer:
         if not callable(builder):
             raise RuntimeError(f"Builder found at {package}:{attribute} isn't callable")
 
-        return Puppeteer(builder, token, shard_count=shard_count, shard_ids=shard_ids, process_size=process_size)
+        return Master(builder, token, shard_count=shard_count, shard_ids=shard_ids, process_size=process_size)
 
     @classmethod
     def from_path(
@@ -159,7 +159,7 @@ class Puppeteer:
         shard_ids: typing.AbstractSet[int],
         *,
         process_size: int = DEFAULT_PROCESS_SIZE,
-    ) -> Puppeteer:
+    ) -> Master:
         spec = importlib.util.spec_from_file_location(path.name, str(path.absolute()))
         if not spec:
             raise RuntimeError(f"Module not found at path {path}")
@@ -175,7 +175,7 @@ class Puppeteer:
         if not callable(builder):
             raise RuntimeError(f"Builder found at {path}:{attribute} is not callable")
 
-        return Puppeteer(builder, token, shard_count=shard_count, shard_ids=shard_ids, process_size=process_size)
+        return Master(builder, token, shard_count=shard_count, shard_ids=shard_ids, process_size=process_size)
 
     def _keep_alive(self) -> None:
         with self._new_cluster_event[1]:
@@ -208,7 +208,7 @@ class Puppeteer:
                     new_cluster_future,
                     *process_futures_set,
                 )
-                done, pending = futures.wait(current_futures, return_when=futures.FIRST_COMPLETED)
+                done, _ = futures.wait(current_futures, return_when=futures.FIRST_COMPLETED)
 
                 if close_future in done:
                     connection_event.set()
@@ -228,7 +228,7 @@ class Puppeteer:
                 if new_cluster_future in done:
                     with self._new_cluster_event[1]:
                         process_futures_map = self._process_futures.copy()
-                        process_futures_set = frozenset(self._process_futures)
+                        process_futures_set = frozenset(process_futures_map)
                         connections = self._connections.copy()
                         self._new_cluster_event[0].clear()
 
@@ -316,7 +316,7 @@ class Puppeteer:
                     )
 
                     current_futures: typing.Sequence[futures.Future[typing.Any]] = (receive_future, process_future)
-                    done, pending = futures.wait(current_futures, return_when=futures.FIRST_COMPLETED)
+                    done, _ = futures.wait(current_futures, return_when=futures.FIRST_COMPLETED)
 
                     if process_future in done:
                         # This result call is expected to always raise.

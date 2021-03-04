@@ -32,7 +32,7 @@ from __future__ import annotations
 __all__: typing.Sequence[str] = [
     # master.py
     "master",
-    "Puppeteer"
+    "Master"
     # models.py
     "models",
     "BotBuilderProto",

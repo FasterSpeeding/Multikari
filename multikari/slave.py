@@ -36,6 +36,7 @@ __all__: typing.Sequence[str] = []
 import asyncio
 import logging
 import os
+import sys
 import typing
 import weakref
 from concurrent import futures
@@ -60,7 +61,6 @@ class Client(models.SlaveClientProto):
         self._close_event = asyncio.Event()
         self._connection = conn
         self._future: typing.Optional[asyncio.Future[None]] = None
-        self._kill_event = asyncio.Event()
         self._logger = logging.getLogger(f"hikari.multikari.{os.getpid()}")
         self._message_futures: weakref.WeakValueDictionary[
             bytes, asyncio.Future[models.BaseMessage]
@@ -71,6 +71,9 @@ class Client(models.SlaveClientProto):
         return self._future is not None
 
     def close(self) -> None:
+        if not self._future:
+            raise RuntimeError("Cannot close a client that hasn't started")
+
         self._close_event.set()
 
     async def join(self) -> None:
@@ -85,40 +88,39 @@ class Client(models.SlaveClientProto):
         conn_future: typing.Optional[futures.Future[typing.Any]] = None
         conn_task: typing.Optional[asyncio.Future[typing.Any]] = None
         join_task = asyncio.create_task(bot.join())
+        thread_pool = futures.ThreadPoolExecutor(1)
 
         try:
-            with futures.ThreadPoolExecutor(1) as thread_pool:
+            while True:
                 conn_event.clear()
                 conn_future = thread_pool.submit(utilities.poll_recv, self._connection, conn_event)
                 conn_task = asyncio.wrap_future(conn_future)
 
-                while True:
-                    current_futures = (join_task, conn_task, close_event)
-                    done, pending = await asyncio.wait(current_futures, return_when=asyncio.FIRST_COMPLETED)
+                current_futures = (join_task, conn_task, close_event)
+                done, _ = await asyncio.wait(current_futures, return_when=asyncio.FIRST_COMPLETED)
 
-                    if close_event in done or join_task in done:
-                        # TODO: going away message?
-                        break
+                if close_event in done or join_task in done:
+                    # TODO: going away message?
+                    break
 
-                    message = await conn_task
-                    if not isinstance(message, models.BaseMessage):
-                        self._logger.warning(
-                            "Ignoring invalid message, expected a BaseMessage but got %s", type(message)
-                        )
+                message = await conn_task
+                if not isinstance(message, models.BaseMessage):
+                    self._logger.warning("Ignoring invalid message, expected a BaseMessage but got %r", type(message))
+                    continue
 
-                    else:
-                        if message_future := self._message_futures.pop(message.nonce, None):
-                            message_future.set_result(message)
+                if message_future := self._message_futures.pop(message.nonce, None):
+                    message_future.set_result(message)
 
-                        if isinstance(message, models.CloseMessage):
-                            self._logger.info("Process %r going away", os.getpid())
-                            break
+                if isinstance(message, models.CloseMessage):
+                    self._logger.info("Process %r going away", os.getpid())
+                    break
 
-                        else:
-                            self._logger.warning("Ignoring unexpected message type %s", type(message))
+                elif isinstance(message, models.PingMessage):
+                    self._logger.info("responding to ping %r", message.nonce)
+                    self._connection.send(models.PongMessage(message.nonce, message.shard_id))
 
-                    conn_future = thread_pool.submit(utilities.poll_recv, self._connection, conn_event)
-                    conn_task = asyncio.wrap_future(conn_future)
+                else:
+                    self._logger.warning("Ignoring unexpected message type %r", type(message))
 
         finally:
             close_event.cancel()
@@ -133,8 +135,13 @@ class Client(models.SlaveClientProto):
             if conn_task is not None:
                 conn_task.cancel()
 
+            if sys.version_info.minor >= 9:
+                thread_pool.shutdown(wait=False, cancel_futures=True)
+
+            else:
+                thread_pool.shutdown(wait=False)
+
             self._logger.info("Process %r going away", os.getpid())
-            raise
 
     def run(self, bot: traits.BotAware, shard_count: int, shard_ids: typing.AbstractSet[int]) -> None:
         loop = asyncio.get_event_loop()
@@ -168,6 +175,10 @@ class Client(models.SlaveClientProto):
             raise RuntimeError("Cannot send on a client that isn't running")
 
         self._connection.send(message)
+
+    def shutdown(self) -> None:
+        self.send_no_wait(models.CloseMessage())
+        self.close()
 
 
 # TODO: support a string for the builder
