@@ -258,11 +258,16 @@ class Master:
         self._close_event.set()
         assert self._process_pool is not None
         assert self._thread_pool is not None
-        for conn in self._connections.values():
+
+        connections = self._connections.values()
+        self._connections = {}
+        for conn in connections:
             conn.send(models.CloseMessage())
 
+        process_futures = self._process_futures.keys()
+        self._process_futures = {}
         # Try to wait for the child processes to end smoothly before slamming the line on them.
-        _, pending = futures.wait(self._process_futures.keys(), timeout=timeout)
+        _, pending = futures.wait(process_futures, timeout=timeout)
         for future in pending:
             future.cancel()
 
