@@ -33,7 +33,9 @@ from __future__ import annotations
 
 __all__: typing.Sequence[str] = []
 
+import asyncio
 import itertools
+import pickle
 import threading
 import typing
 import weakref
@@ -107,7 +109,7 @@ def poll_recv(conn: connection.Connection, event: Event) -> typing.Optional[typi
             if event_future.done():
                 return None
 
-    except EOFError:
+    except EOFError:  # TODO: also OSError?
         return models.CloseMessage()
 
 
@@ -124,5 +126,52 @@ def poll_connections(
                 return []
 
     # TODO: how to handle this here?
-    except EOFError:
+    except EOFError:  # TODO: also OSError?
         return []
+
+
+class PipeProtocol(asyncio.Protocol):
+    __slots__: typing.Tuple[str, ...] = ("_close_event", "is_open", "_queue")
+
+    def __init__(self) -> None:
+        self._close_event = asyncio.Event()
+        self.is_open = False
+        self._queue: asyncio.Queue[typing.Any] = asyncio.Queue()
+
+    def connection_made(self, _: asyncio.BaseTransport) -> None:
+        self.is_open = True
+
+    def data_received(self, data: bytes) -> None:
+        data = pickle.loads(data)
+        self._queue.put_nowait(data)
+
+    def connection_lost(self, _: typing.Optional[Exception]) -> None:
+        self.is_open = False
+        self._close_event.set()
+
+    async def iter(self) -> typing.AsyncIterator[typing.Any]:
+        if not self.is_open:
+            return
+
+        close_task = asyncio.create_task(self._close_event.wait())
+        while True:
+            get_task = asyncio.create_task(self._queue.get())
+            done, _ = await asyncio.wait((close_task, get_task), return_when=asyncio.FIRST_COMPLETED)
+
+            if get_task not in done:
+                return
+
+            yield await get_task
+
+    async def read(self) -> typing.Any:
+        if not self.is_open:
+            raise EOFError()
+
+        close_task = asyncio.create_task(self._close_event.wait())
+        get_task = asyncio.create_task(self._queue.get())
+        done, _ = await asyncio.wait((close_task, get_task), return_when=asyncio.FIRST_COMPLETED)
+
+        if get_task in done:
+            return await get_task
+
+        raise EOFError()

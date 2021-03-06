@@ -263,6 +263,7 @@ class Master:
         self._connections = {}
         for conn in connections:
             conn.send(models.CloseMessage())
+            conn.close()  # TODO: do we really want to do this?
 
         process_futures = self._process_futures.keys()
         self._process_futures = {}

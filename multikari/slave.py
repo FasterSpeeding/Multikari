@@ -36,10 +36,8 @@ __all__: typing.Sequence[str] = []
 import asyncio
 import logging
 import os
-import sys
 import typing
 import weakref
-from concurrent import futures
 
 from hikari.events import lifetime_events
 
@@ -83,27 +81,26 @@ class Client(models.SlaveClientProto):
         await self._future
 
     async def _keep_alive(self, bot: traits.BotAware) -> None:
-        close_event = asyncio.create_task(self._close_event.wait())
-        conn_event = utilities.Event()
-        conn_future: typing.Optional[futures.Future[typing.Any]] = None
-        conn_task: typing.Optional[asyncio.Future[typing.Any]] = None
+        loop = asyncio.get_running_loop()
+        _, conn_protocol = await loop.connect_read_pipe(utilities.PipeProtocol, self._connection)
+        assert isinstance(conn_protocol, utilities.PipeProtocol)
+
+        close_task = asyncio.create_task(self._close_event.wait())
+        conn_task = asyncio.create_task(conn_protocol.read())
         join_task = asyncio.create_task(bot.join())
-        thread_pool = futures.ThreadPoolExecutor(1)
 
         try:
             while True:
-                conn_event.clear()
-                conn_future = thread_pool.submit(utilities.poll_recv, self._connection, conn_event)
-                conn_task = asyncio.wrap_future(conn_future)
+                current_tasks = (join_task, conn_task, close_task)
+                done, _ = await asyncio.wait(current_tasks, return_when=asyncio.FIRST_COMPLETED)
 
-                current_futures = (join_task, conn_task, close_event)
-                done, _ = await asyncio.wait(current_futures, return_when=asyncio.FIRST_COMPLETED)
-
-                if close_event in done or join_task in done:
+                if close_task in done or join_task in done:
                     # TODO: going away message?
                     break
 
-                message = await conn_task
+                message = await conn_task  # TODO: do we want to handle eof here?
+                conn_task = asyncio.create_task(conn_protocol.read())
+
                 if not isinstance(message, models.BaseMessage):
                     self._logger.warning("Ignoring invalid message, expected a BaseMessage but got %r", type(message))
                     continue
@@ -112,7 +109,6 @@ class Client(models.SlaveClientProto):
                     message_future.set_result(message)
 
                 if isinstance(message, models.CloseMessage):
-                    self._logger.info("Process %r going away", os.getpid())
                     break
 
                 elif isinstance(message, models.PingMessage):
@@ -123,23 +119,13 @@ class Client(models.SlaveClientProto):
                     self._logger.warning("Ignoring unexpected message type %r", type(message))
 
         finally:
-            close_event.cancel()
-            conn_event.set()
+            close_task.cancel()
+            conn_task.cancel()
             join_task.cancel()
+            self._connection.close()
+
             if bot.is_alive:
                 await bot.close()
-
-            if conn_future is not None:
-                conn_future.cancel()
-
-            if conn_task is not None:
-                conn_task.cancel()
-
-            if sys.version_info.minor >= 9:
-                thread_pool.shutdown(wait=False, cancel_futures=True)
-
-            else:
-                thread_pool.shutdown(wait=False)
 
             self._logger.info("Process %r going away", os.getpid())
 
