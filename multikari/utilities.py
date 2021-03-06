@@ -130,7 +130,7 @@ def poll_connections(
         return []
 
 
-class PipeProtocol(asyncio.Protocol):
+class PipeReadProtocol(asyncio.Protocol):
     __slots__: typing.Tuple[str, ...] = ("_close_event", "is_open", "_queue")
 
     def __init__(self) -> None:
@@ -138,16 +138,19 @@ class PipeProtocol(asyncio.Protocol):
         self.is_open = False
         self._queue: asyncio.Queue[typing.Any] = asyncio.Queue()
 
-    def connection_made(self, _: asyncio.BaseTransport) -> None:
+    def connection_lost(self, _: typing.Optional[Exception]) -> None:
+        self.is_open = False
+        self._close_event.set()
+
+    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        if not isinstance(transport, asyncio.ReadTransport):
+            raise ValueError("PipeReadProtocol can only be used with a readable connection")
+
         self.is_open = True
 
     def data_received(self, data: bytes) -> None:
         data = pickle.loads(data)
         self._queue.put_nowait(data)
-
-    def connection_lost(self, _: typing.Optional[Exception]) -> None:
-        self.is_open = False
-        self._close_event.set()
 
     async def iter(self) -> typing.AsyncIterator[typing.Any]:
         if not self.is_open:
@@ -175,3 +178,25 @@ class PipeProtocol(asyncio.Protocol):
             return await get_task
 
         raise EOFError()
+
+
+class PipeWriteProtocol(asyncio.Protocol):
+    __slots__: typing.Tuple[str, ...] = ("_transport",)
+
+    def __init__(self) -> None:
+        self._transport: typing.Optional[asyncio.WriteTransport] = None
+
+    def connection_lost(self, _: typing.Optional[Exception], /) -> None:
+        self._transport = None
+
+    def connection_made(self, transport: asyncio.BaseTransport, /) -> None:
+        if not isinstance(transport, asyncio.WriteTransport):
+            raise ValueError("PipeWriteProtocol can only be used with a writable connection")
+
+        self._transport = transport
+
+    def write(self, data: typing.Any, /) -> None:
+        if not self._transport:
+            raise EOFError()
+
+        self._transport.write(pickle.dumps(data))

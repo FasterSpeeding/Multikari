@@ -53,11 +53,19 @@ _ValueT = typing.TypeVar("_ValueT")
 
 
 class Client(models.SlaveClientProto):
-    __slots__: typing.Sequence[str] = ("_close_event", "_connection", "_future", "_logger", "_message_futures")
+    __slots__: typing.Sequence[str] = (
+        "_close_event",
+        "_connection",
+        "_conn_write_protocol",
+        "_future",
+        "_logger",
+        "_message_futures",
+    )
 
     def __init__(self, conn: connection.Connection) -> None:
         self._close_event = asyncio.Event()
         self._connection = conn
+        self._conn_write_protocol: typing.Optional[utilities.PipeWriteProtocol] = None
         self._future: typing.Optional[asyncio.Future[None]] = None
         self._logger = logging.getLogger(f"hikari.multikari.{os.getpid()}")
         self._message_futures: weakref.WeakValueDictionary[
@@ -82,11 +90,14 @@ class Client(models.SlaveClientProto):
 
     async def _keep_alive(self, bot: traits.BotAware) -> None:
         loop = asyncio.get_running_loop()
-        _, conn_protocol = await loop.connect_read_pipe(utilities.PipeProtocol, self._connection)
-        assert isinstance(conn_protocol, utilities.PipeProtocol)
+        _, conn_read_protocol = await loop.connect_read_pipe(utilities.PipeReadProtocol, self._connection)
+        assert isinstance(conn_read_protocol, utilities.PipeReadProtocol)
+        _, conn_write_protocol = await loop.connect_write_pipe(utilities.PipeWriteProtocol, self._connection)
+        assert isinstance(conn_write_protocol, utilities.PipeWriteProtocol)
+        self._conn_write_protocol = conn_write_protocol
 
         close_task = asyncio.create_task(self._close_event.wait())
-        conn_task = asyncio.create_task(conn_protocol.read())
+        conn_task = asyncio.create_task(conn_read_protocol.read())
         join_task = asyncio.create_task(bot.join())
 
         try:
@@ -99,7 +110,7 @@ class Client(models.SlaveClientProto):
                     break
 
                 message = await conn_task  # TODO: do we want to handle eof here?
-                conn_task = asyncio.create_task(conn_protocol.read())
+                conn_task = asyncio.create_task(conn_read_protocol.read())
 
                 if not isinstance(message, models.BaseMessage):
                     self._logger.warning("Ignoring invalid message, expected a BaseMessage but got %r", type(message))
@@ -113,7 +124,7 @@ class Client(models.SlaveClientProto):
 
                 elif isinstance(message, models.PingMessage):
                     self._logger.info("responding to ping %r", message.nonce)
-                    self._connection.send(models.PongMessage(message.nonce, message.shard_id))
+                    conn_write_protocol.write(models.PongMessage(message.nonce, message.shard_id))
 
                 else:
                     self._logger.warning("Ignoring unexpected message type %r", type(message))
@@ -157,10 +168,10 @@ class Client(models.SlaveClientProto):
         return future
 
     def send_no_wait(self, message: models.BaseMessage, /) -> None:
-        if not self._future:
+        if not self._future or not self._conn_write_protocol:
             raise RuntimeError("Cannot send on a client that isn't running")
 
-        self._connection.send(message)
+        self._conn_write_protocol.write(message)
 
     def shutdown(self) -> None:
         self.send_no_wait(models.CloseMessage())
