@@ -34,6 +34,7 @@ from __future__ import annotations
 __all__: typing.Sequence[str] = []
 
 import asyncio
+import io
 import itertools
 import pickle
 import threading
@@ -131,53 +132,96 @@ def poll_connections(
 
 
 class PipeReadProtocol(asyncio.Protocol):
-    __slots__: typing.Tuple[str, ...] = ("_close_event", "is_open", "_queue")
+    __slots__: typing.Tuple[str, ...] = ("_buffer", "_bytes", "_close_event", "is_open", "_transport")
 
     def __init__(self) -> None:
+        self._buffer: asyncio.Queue[bytes] = asyncio.Queue()
+        self._bytes: typing.Optional[io.BytesIO] = None
         self._close_event = asyncio.Event()
         self.is_open = False
-        self._queue: asyncio.Queue[typing.Any] = asyncio.Queue()
+        self._transport: typing.Optional[asyncio.ReadTransport] = None
 
-    def connection_lost(self, _: typing.Optional[Exception]) -> None:
+    def close(self) -> None:
         self.is_open = False
         self._close_event.set()
 
-    def connection_made(self, transport: asyncio.BaseTransport) -> None:
+        if self._transport is not None:
+            self._transport.close()
+            self._transport = None
+
+    def connection_lost(self, _: typing.Optional[Exception], /) -> None:
+        self.is_open = False
+        self._close_event.set()
+
+    def connection_made(self, transport: asyncio.BaseTransport, /) -> None:
         if not isinstance(transport, asyncio.ReadTransport):
             raise ValueError("PipeReadProtocol can only be used with a readable connection")
 
         self.is_open = True
+        self._transport = transport
 
-    def data_received(self, data: bytes) -> None:
-        data = pickle.loads(data)
-        self._queue.put_nowait(data)
+    def data_received(self, data: bytes, /) -> None:
+        self._buffer.put_nowait(data)
+
+    def _try_get_next_entry(self) -> typing.Any:
+        if self._bytes:
+            # position = self._bytes.tell()
+            try:
+                return pickle.load(self._bytes)
+
+            except EOFError:
+                self._bytes.close()
+                self._bytes = None
+
+            # This behaviour appears to only happen on windows when data is lost and is irrecoverable
+            # except pickle.UnpicklingError:
+            #     self._bytes.seek(position)
+
+        if not self._buffer.empty():
+            # if self._bytes:
+            #     self._bytes.write(self._buffer.pop(0))
+            # else:
+            self._bytes = io.BytesIO(self._buffer.get_nowait())
+            return pickle.load(self._bytes)
+
+        raise EOFError
 
     async def iter(self) -> typing.AsyncIterator[typing.Any]:
-        if not self.is_open:
-            return
-
         close_task = asyncio.create_task(self._close_event.wait())
         while True:
-            get_task = asyncio.create_task(self._queue.get())
-            done, _ = await asyncio.wait((close_task, get_task), return_when=asyncio.FIRST_COMPLETED)
+            try:
+                yield self._try_get_next_entry()
 
-            if get_task not in done:
-                return
+            except EOFError:
+                if not self.is_open:
+                    return
 
-            yield await get_task
+                get_task = asyncio.create_task(self._buffer.get())
+                done, _ = await asyncio.wait((close_task, get_task), return_when=asyncio.FIRST_COMPLETED)
+
+                if get_task not in done:
+                    return
+
+                self._bytes = io.BytesIO(await get_task)
+                yield pickle.load(self._bytes)
 
     async def read(self) -> typing.Any:
-        if not self.is_open:
-            raise EOFError()
+        try:
+            return self._try_get_next_entry()
 
-        close_task = asyncio.create_task(self._close_event.wait())
-        get_task = asyncio.create_task(self._queue.get())
-        done, _ = await asyncio.wait((close_task, get_task), return_when=asyncio.FIRST_COMPLETED)
+        except EOFError:
+            if self.is_open:
+                close_task = asyncio.create_task(self._close_event.wait())
+                get_task = asyncio.create_task(self._buffer.get())
+                done, _ = await asyncio.wait((close_task, get_task), return_when=asyncio.FIRST_COMPLETED)
 
-        if get_task in done:
-            return await get_task
+                if get_task in done:
+                    if not self._bytes:
+                        self._bytes = io.BytesIO(await get_task)
 
-        raise EOFError()
+                    return pickle.load(self._bytes)
+
+            raise EOFError() from None
 
 
 class PipeWriteProtocol(asyncio.Protocol):
@@ -185,6 +229,11 @@ class PipeWriteProtocol(asyncio.Protocol):
 
     def __init__(self) -> None:
         self._transport: typing.Optional[asyncio.WriteTransport] = None
+
+    def close(self) -> None:
+        if self._transport:
+            self._transport.close()
+            self._transport = None
 
     def connection_lost(self, _: typing.Optional[Exception], /) -> None:
         self._transport = None
@@ -200,3 +249,15 @@ class PipeWriteProtocol(asyncio.Protocol):
             raise EOFError()
 
         self._transport.write(pickle.dumps(data))
+
+
+async def wrap_read_pipe(conn: connection.Connection, /) -> PipeReadProtocol:
+    _, protocol = await asyncio.get_running_loop().connect_read_pipe(PipeReadProtocol, conn)
+    assert isinstance(protocol, PipeReadProtocol)
+    return protocol
+
+
+async def wrap_write_pipe(conn: connection.Connection, /) -> PipeWriteProtocol:
+    _, protocol = await asyncio.get_running_loop().connect_write_pipe(PipeWriteProtocol, conn)
+    assert isinstance(protocol, PipeWriteProtocol)
+    return protocol
