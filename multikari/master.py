@@ -245,19 +245,35 @@ class Master:
             if new_cluster_future:
                 new_cluster_future.cancel()
 
-            self.close()
+            self.__close()
+            assert self._process_pool is not None
+            if sys.version_info.minor >= 9:
+                self._process_pool.shutdown(wait=False, cancel_futures=True)
+
+            else:
+                self._process_pool.shutdown(wait=False)
+
+            self._process_pool = None
+            self._future = None
 
     def close(self, *, timeout: TimeoutT = DEFAULT_TIMEOUT) -> None:
         with self._lock:
             if not self._future:
                 raise RuntimeError("Cannot close an instance that isn't running")
 
+            task = self._future
             self.__close(timeout=timeout)
+
+        task.result()
+
+        with self._lock:
+            if self._future:
+                self._future.result()
+                self._thread_pool.shutdown(wait=False)
+                self._thread_pool = None
 
     def __close(self, *, timeout: TimeoutT = DEFAULT_TIMEOUT) -> None:
         self._close_event.set()
-        assert self._process_pool is not None
-        assert self._thread_pool is not None
 
         connections = self._connections.values()
         self._connections = {}
@@ -272,24 +288,9 @@ class Master:
         for future in pending:
             future.cancel()
 
-        if sys.version_info.minor >= 9:
-            self._process_pool.shutdown(wait=False, cancel_futures=True)
-            self._thread_pool.shutdown(wait=False, cancel_futures=True)
-
-        else:
-            self._process_pool.shutdown(wait=False)
-            self._thread_pool.shutdown(wait=False)
-
-        self._process_pool = None
-        self._future = None
-        self._thread_pool = None
-
     def join(self) -> None:
-        with self._lock:
-            if not self._future:
-                raise RuntimeError("Cannot wait for a client that's not started to join")
-
-            task = self._future
+        if not (task := self._future):
+            raise RuntimeError("Cannot wait for a client that's not started to join")
 
         task.result()
 
@@ -348,4 +349,8 @@ class Master:
                 close_receive.set()
                 receive_future.cancel()
                 self.__close()
+                self._future.result()
+                self._future = None
+                self._thread_pool.shutdown(wait=False)
+                self._thread_pool = None
                 raise
