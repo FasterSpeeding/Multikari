@@ -1,0 +1,15 @@
+[package]
+name = "multikari_gendo"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+async-trait = "0.1.51"
+
+tokio-zmq = "0.10.1"
+
+[dependencies.tokio]
+    features = ["rt-multi-thread"]
+    version = "1.14.0"
