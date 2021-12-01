@@ -7,9 +7,27 @@ edition = "2021"
 
 [dependencies]
 async-trait = "0.1.51"
+# async_zmq = "0.3.2"
+dotenv = "0.15.0"
+futures-util = "0.3"
+log = "0.4.14"
+simple_logger = "1.11.0"
+# tokio-zmq = "0.10.1"
+twilight-gateway = "0.7.1"
+twilight-model = "0.7.2"
 
-tokio-zmq = "0.10.1"
+[dependencies.tmq]
+    # features = ["zmq-vendored"]
+    version = "0.3.0"
 
 [dependencies.tokio]
-    features = ["rt-multi-thread"]
+    features = ["macros", "rt-multi-thread"]
     version = "1.14.0"
+
+
+# [dependencies.zmq-sys]
+#     features = ["vendored"]
+#     version = "0.11.0"
+
+# [features]
+# vendored-zmq = ['zmq/vendored']
