@@ -96,7 +96,6 @@ class ZmqReceiver(AbstractReceiver):
     async def _dispatch_loop(self, callback: DispatchSignature, close_event: asyncio.Event) -> None:
         close_task = asyncio.get_running_loop().create_task(close_event.wait())
         while True:
-            # try:
             # recv_multipart just blocks after its finished going through the internal buffer
             # once the socket has been closed when used in blocking mode which is less than ideal.
 
@@ -138,3 +137,27 @@ class ZmqReceiver(AbstractReceiver):
 def load_auth(socket: zmq.Socket) -> None:
     socket.curve_publickey, socket.curve_secretkey = zmq.curve_keypair()
     socket.curve_serverkey, _ = zmq.auth.load_certificate(".curve/server.key")
+
+
+if __name__ == "__main__":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    import json
+
+    import hikari
+    from hikari.impl import event_factory
+
+    rest = hikari.RESTApp().acquire("gay")
+    event_factory = event_factory.EventFactoryImpl(rest)
+    event_manager = hikari.impl.EventManagerImpl(event_factory, hikari.Intents.ALL)
+
+    def _handle_event(shard_id: int, event_name: str, payload: bytes, /) -> None:
+        event_manager.consume_raw_event(event_name, None, json.loads(payload)["d"])
+        print(shard_id, event_name)
+
+    async def _main() -> None:
+        receiver = ZmqReceiver("tcp://127.0.0.1:5555")
+        await receiver.connect(_handle_event, _handle_event)
+        await receiver.join()
+
+    asyncio.run(_main())
