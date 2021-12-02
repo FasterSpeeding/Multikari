@@ -9,6 +9,7 @@ edition = "2021"
 async-trait = "0.1.51"
 # async_zmq = "0.3.2"
 dotenv = "0.15.0"
+futures = "0.3"
 futures-util = "0.3"
 log = "0.4.14"
 simple_logger = "1.11.0"
@@ -23,7 +24,6 @@ twilight-model = "0.7.2"
 [dependencies.tokio]
     features = ["macros", "rt-multi-thread"]
     version = "1.14.0"
-
 
 # [dependencies.zmq-sys]
 #     features = ["vendored"]

@@ -33,15 +33,14 @@ use std::str::FromStr;
 use twilight_gateway::{cluster, Event, EventTypeFlags, Intents};
 // use abc;
 mod sender;
+mod utility;
+use sender::Sender;
 
 // trait
 
-pub fn get_env_variable(key: &str) -> Option<String> {
-    dotenv::var(key).or_else(|_| std::env::var(key)).ok()
-}
-
 pub fn setup_logging() {
-    let level = match get_env_variable("LOG_LEVEL").map(|v| log::LevelFilter::from_str(&v)) {
+    let level = match utility::get_env_variable("LOG_LEVEL").map(|v| log::LevelFilter::from_str(&v))
+    {
         Some(Err(_)) => {
             panic!("Invalid log level provided, expected TRACE, DEBUG, INFO, WARN or ERROR")
         }
@@ -64,14 +63,17 @@ async fn main() {
         log::info!("Couldn't load .env file: {}", error);
     }
 
-    let token = get_env_variable("DISCORD_TOKEN").expect("DISCORD_TOKEN env variable not found");
-    let intents = match get_env_variable("DISCORD_INTENTS")
+    let token =
+        utility::get_env_variable("DISCORD_TOKEN").expect("DISCORD_TOKEN env variable not found");
+    let intents = match utility::get_env_variable("DISCORD_INTENTS")
         .map(|v| u64::from_str(&v).map(Intents::from_bits))
     {
         Some(Ok(Some(intents))) => intents,
         None => Intents::all() & !(Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES),
         _ => panic!("Invalid INTENTS value in env variables"),
     };
+
+    let sender = sender::ZmqSender::build().await;
 
     let (cluster, mut events) = cluster::Cluster::builder(token, intents)
         .event_types(EventTypeFlags::SHARD_PAYLOAD)
@@ -86,8 +88,8 @@ async fn main() {
     });
 
     while let Some(event) = events.next().await {
-        let event = match event {
-            (_, Event::ShardPayload(payload)) => payload,
+        let (shard_id, event) = match event {
+            (shard_id, Event::ShardPayload(payload)) => (shard_id, payload),
             _ => continue,
         };
         let payload = std::str::from_utf8(&event.bytes);
@@ -101,8 +103,7 @@ async fn main() {
             twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(payload)
         {
             if let Some(event_type) = event.event_type_ref() {
-                println!("{}", event_type);
-                payload;
+                sender.consume_event(shard_id, event_type, payload).await;
             }
         }
     }

@@ -28,50 +28,7 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-use async_trait::async_trait;
-use futures::SinkExt;
 
-use crate::utility;
-
-#[async_trait]
-pub trait Sender {
-    async fn consume_event(&self, shard_id: u64, event_name: &str, event: &str);
-}
-
-pub struct ZmqSender {
-    ctx: tmq::Context,
-    mq: std::sync::Arc<tokio::sync::Mutex<tmq::push::Push>>,
-}
-
-impl ZmqSender {
-    pub async fn build() -> Self {
-        let address =
-            utility::get_env_variable("ZMQ_ADDRESS").expect("Missing ZMQ_ADDRESS env variable");
-        // let curve_server = utility::get_env_variable("ZMQ_CURVE_SERVER")
-        //     .expect("Missing ZMQ_CURVE_SERVER env variable");
-
-        let ctx = tmq::Context::new();
-        // .set_curve_server(&curve_server)
-        // set_backlog
-        let mq = tmq::push::push(&ctx)
-            // .connect(&address)
-            .bind(&address)
-            .expect("Failed to connect to ZMQ message queue");
-        Self {
-            ctx,
-            mq: std::sync::Arc::from(tokio::sync::Mutex::from(mq)),
-        }
-    }
-}
-
-#[async_trait]
-impl Sender for ZmqSender {
-    async fn consume_event(&self, shard_id: u64, event_name: &str, event: &str) {
-        self.mq
-            .lock()
-            .await
-            .send(vec![&format!("{}", shard_id) as &str, event_name, event])
-            .await
-            .unwrap(); // TODO:  e rror handling
-    }
+pub fn get_env_variable(key: &str) -> Option<String> {
+    dotenv::var(key).or_else(|_| std::env::var(key)).ok()
 }
