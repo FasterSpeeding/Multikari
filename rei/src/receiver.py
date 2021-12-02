@@ -62,38 +62,42 @@ class AbstractReceiver(abc.ABC):
 
 
 class ZmqReceiver(AbstractReceiver):
-    __slots__ = ("_closing_event", "_ctx", "_is_closing", "_join_event", "_socket", "_task", "_url")
+    __slots__ = ("_closing_event", "_ctx", "_is_closing", "_join_event", "_pull_socket", "_task", "_url")
 
     def __init__(self, url: str, /) -> None:
         self._closing_event: typing.Optional[asyncio.Event] = None
         self._ctx = zmq.asyncio.Context()
         self._is_closing = False
         self._join_event: typing.Optional[asyncio.Event] = None
-        self._socket: typing.Optional[zmq.asyncio.Socket] = None
+        self._pull_socket: typing.Optional[zmq.asyncio.Socket] = None
         self._task: typing.Optional[asyncio.Task[None]] = None
         self._url = url
 
     async def connect(self, dispatch_callback: DispatchSignature, sub_callback: DispatchSignature, /) -> None:
-        if self._socket:
+        if self._pull_socket:
             raise RuntimeError("Already connected")
 
         self._closing_event = asyncio.Event()
-        self._socket = self._ctx.socket(zmq.PULL)
-        self._socket.set_hwm(1)
-        self._socket.connect(self._url)
-        self._task = asyncio.get_running_loop().create_task(self._dispatch_loop(dispatch_callback, self._closing_event))
+        self._pull_socket = self._ctx.socket(zmq.PULL)
+        self._pull_socket.set_hwm(1)
+        self._pull_socket.connect(self._url)
+        self._task = asyncio.get_running_loop().create_task(
+            self._dispatch_loop(self._pull_socket, dispatch_callback, self._closing_event)
+        )
 
     async def disconnect(self) -> None:
-        if not self._socket or not self._closing_event:
+        if not self._pull_socket or not self._closing_event:
             raise RuntimeError("Not connected")
 
-        self._socket.close(linger=0)
-        self._socket = None
+        self._pull_socket.close(linger=0)
+        self._pull_socket = None
         self._closing_event.set()
         self._closing_event = None
         await self.join()
 
-    async def _dispatch_loop(self, callback: DispatchSignature, close_event: asyncio.Event) -> None:
+    async def _dispatch_loop(
+        self, socket: zmq.asyncio.Socket, callback: DispatchSignature, close_event: asyncio.Event
+    ) -> None:
         close_task = asyncio.get_running_loop().create_task(close_event.wait())
         while True:
             # recv_multipart just blocks after its finished going through the internal buffer
@@ -103,14 +107,18 @@ class ZmqReceiver(AbstractReceiver):
             # for a bit leads to unwanted cpu usage characteristics so for now that's being avoided.
 
             # For some reason create_task gets deadlocked on this, so ensure_future is used.
-            recv_task = asyncio.ensure_future(self._socket.recv_multipart(copy=False))
+            recv_task = asyncio.ensure_future(socket.recv_multipart(copy=False))
             done, _ = await asyncio.wait((recv_task, close_task), return_when=asyncio.FIRST_COMPLETED)
 
             if recv_task in done:
                 message: list[zmq.Frame] = await recv_task
 
                 try:
-                    callback(int(message[0].bytes), message[1].bytes.decode(), message[2].bytes)
+                    shard_id = message[0].bytes
+                    event_name = message[1].bytes
+                    payload = message[2].bytes
+                    assert isinstance(shard_id, bytes) and isinstance(event_name, bytes) and isinstance(payload, bytes)
+                    callback(int(shard_id), event_name.decode(), payload)
                 except Exception:
                     _LOGGER.error("Failed to deserialize received event", exc_info=True)
 
