@@ -32,17 +32,13 @@
 from __future__ import annotations
 
 __all__: list[str] = [
-    # ./receivers
-    "receivers",
+    # ./abc
+    "abc",
+    #  ./zmq
+    "zmq",
     "ZmqReceiver",
-    # ./bot.py
-    "bot",
-    "MQBot",
-    # ./shards.py
-    "shards",
 ]
 
-from . import receivers
-from . import shards
-from .bot import MQBot
-from .receivers import ZmqReceiver
+from . import abc
+from . import zmq
+from .zmq import ZmqReceiver

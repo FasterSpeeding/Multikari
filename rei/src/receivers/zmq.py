@@ -31,37 +31,28 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 from __future__ import annotations
 
-__all__ = []
+__all__ = ["ZmqReceiver"]
 
-import abc
 import asyncio
 import logging
 import typing
-from collections import abc as collections
 
 import zmq
 import zmq.asyncio
 import zmq.auth
 
-DispatchSignature = collections.Callable[[int, str, bytes], None]
+from . import abc
+
+if typing.TYPE_CHECKING:
+    import hikari
+
 _LOGGER = logging.getLogger("multikari")
 
 
-class AbstractReceiver(abc.ABC):
-    @abc.abstractmethod
-    async def connect(self, dispatch_callback: DispatchSignature, sub_callback: DispatchSignature, /) -> None:
-        ...
-
-    @abc.abstractmethod
-    async def disconnect(self) -> None:
-        ...
-
-    @abc.abstractmethod
-    async def join(self) -> None:
-        ...
+# asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 
-class ZmqReceiver(AbstractReceiver):
+class ZmqReceiver(abc.AbstractReceiver):
     __slots__ = ("_closing_event", "_ctx", "_is_closing", "_join_event", "_pull_socket", "_task", "_url")
 
     def __init__(self, url: str, /) -> None:
@@ -73,7 +64,11 @@ class ZmqReceiver(AbstractReceiver):
         self._task: typing.Optional[asyncio.Task[None]] = None
         self._url = url
 
-    async def connect(self, dispatch_callback: DispatchSignature, sub_callback: DispatchSignature, /) -> None:
+    @property
+    def is_alive(self) -> bool:
+        return self._task is not None
+
+    async def connect(self, dispatch_callback: abc.DispatchSignature, /) -> None:
         if self._pull_socket:
             raise RuntimeError("Already connected")
 
@@ -93,10 +88,13 @@ class ZmqReceiver(AbstractReceiver):
         self._pull_socket = None
         self._closing_event.set()
         self._closing_event = None
-        await self.join()
+        await self._join()
+
+    def get_shard(self, _: int, /) -> typing.Optional[hikari.api.GatewayShard]:
+        return None
 
     async def _dispatch_loop(
-        self, socket: zmq.asyncio.Socket, callback: DispatchSignature, close_event: asyncio.Event
+        self, socket: zmq.asyncio.Socket, callback: abc.DispatchSignature, close_event: asyncio.Event
     ) -> None:
         close_task = asyncio.get_running_loop().create_task(close_event.wait())
         while True:
@@ -117,7 +115,9 @@ class ZmqReceiver(AbstractReceiver):
                     shard_id = message[0].bytes
                     event_name = message[1].bytes
                     payload = message[2].bytes
-                    assert isinstance(shard_id, bytes) and isinstance(event_name, bytes) and isinstance(payload, bytes)
+                    assert isinstance(shard_id, bytes)
+                    assert isinstance(event_name, bytes)
+                    assert isinstance(payload, bytes)
                     callback(int(shard_id), event_name.decode(), payload)
                 except Exception:
                     _LOGGER.error("Failed to deserialize received event", exc_info=True)
@@ -132,7 +132,7 @@ class ZmqReceiver(AbstractReceiver):
 
         self._task = None
 
-    async def join(self) -> None:
+    async def _join(self) -> None:
         if not self._task:
             raise RuntimeError("Not connected")
 
@@ -142,30 +142,6 @@ class ZmqReceiver(AbstractReceiver):
         await self._join_event.wait()
 
 
-def load_auth(socket: zmq.Socket) -> None:
+def _load_auth(socket: zmq.Socket) -> None:
     socket.curve_publickey, socket.curve_secretkey = zmq.curve_keypair()
     socket.curve_serverkey, _ = zmq.auth.load_certificate(".curve/server.key")
-
-
-if __name__ == "__main__":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-    import json
-
-    import hikari
-    from hikari.impl import event_factory
-
-    rest = hikari.RESTApp().acquire("gay")
-    event_factory = event_factory.EventFactoryImpl(rest)
-    event_manager = hikari.impl.EventManagerImpl(event_factory, hikari.Intents.ALL)
-
-    def _handle_event(shard_id: int, event_name: str, payload: bytes, /) -> None:
-        event_manager.consume_raw_event(event_name, None, json.loads(payload)["d"])
-        print(shard_id, event_name)
-
-    async def _main() -> None:
-        receiver = ZmqReceiver("tcp://127.0.0.1:5555")
-        await receiver.connect(_handle_event, _handle_event)
-        await receiver.join()
-
-    asyncio.run(_main())

@@ -31,18 +31,34 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 from __future__ import annotations
 
-__all__: list[str] = [
-    # ./receivers
-    "receivers",
-    "ZmqReceiver",
-    # ./bot.py
-    "bot",
-    "MQBot",
-    # ./shards.py
-    "shards",
-]
+__all__ = ["AbstractReceiver"]
 
-from . import receivers
-from . import shards
-from .bot import MQBot
-from .receivers import ZmqReceiver
+import abc
+from collections import abc as collections
+
+DispatchSignature = collections.Callable[[int, str, bytes], None]
+
+
+class AbstractReceiver(abc.ABC):
+    __slots__ = ()
+
+    @property
+    @abc.abstractmethod
+    def is_alive(self) -> bool:
+        ...
+
+    @abc.abstractmethod
+    async def connect(self, dispatch_callback: DispatchSignature, /) -> None:
+        ...
+
+    @abc.abstractmethod
+    async def disconnect(self) -> None:
+        ...
+
+    # @abc.abstractmethod
+    # async def wait_for(self)  -> None:
+    #     ...
+
+    # @abc.abstractmethod
+    # async def stream(self) ->  None:
+    #     ...

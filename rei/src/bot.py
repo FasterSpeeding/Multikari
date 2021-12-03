@@ -31,18 +31,24 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 from __future__ import annotations
 
-__all__ = []
+__all__ = ["MQBot"]
 
+import asyncio
 import datetime
+import json
 import typing
 from concurrent import futures
 
 import hikari
 import hikari.config
-import hikari.impl.event_factory
 import hikari.traits
+from hikari.impl import event_factory
 
-from . import receiver
+from . import receivers
+from . import shards as shards_
+
+if typing.TYPE_CHECKING:
+    from hikari.api import event_manager as event_manager_api
 
 
 class MQBot(
@@ -51,25 +57,66 @@ class MQBot(
     hikari.traits.ShardAware,
     hikari.traits.EventFactoryAware,
     hikari.traits.EventManagerAware,
+    hikari.api.EventManager,
 ):
-    __slots__ = ("_entity_factory", "_event_factory", "_event_manager", "_executor", "_rest")
+    __slots__ = (
+        "_entity_factory",
+        "_event_factory",
+        "_event_manager",
+        "_executor",
+        "_http_settings",
+        "_intents",
+        "_is_alive",
+        "_is_closing",
+        "_join_event",
+        "_me",
+        "_proxy_settings",
+        "_receiver",
+        "_rest",
+        "_shard_count",
+        "_shards",
+    )
 
-    def __init__(self, receiver: receiver.AbstractReceiver, /, token: str) -> None:
-        self._entity_factory = hikari.impl.EntityFactoryImpl(self)
-        self._event_factory = hikari.impl.event_factory.EventFactoryImpl(self)
-        self._event_manager = hikari.impl.EventManagerImpl(self, intents=hikari.Intents.ALL)
+    def __init__(
+        self,
+        receiver: receivers.abc.AbstractReceiver,
+        token: str,
+        /,
+        *,
+        http_settings: typing.Optional[hikari.config.HTTPSettings] = None,
+        max_rate_limit: float = 300.0,
+        max_retries: int = 3,
+        proxy_settings: typing.Optional[hikari.config.ProxySettings] = None,
+        discord_url: typing.Optional[str] = None,
+    ) -> None:
+        self._intents = hikari.Intents.NONE
+        self._is_alive = False
+        self._is_closing = False
+        self._me: typing.Optional[hikari.OwnUser] = None
+        self._receiver = receiver
+        self._shards: dict[int, shards_.Shard] = {}
+
+        self._http_settings = http_settings or hikari.config.HTTPSettings()
+        self._proxy_settings = proxy_settings or hikari.config.ProxySettings()
+        self._shard_count = -1
+
         self._executor: typing.Optional[futures.Executor] = None
+
+        self._entity_factory = hikari.impl.EntityFactoryImpl(self)
+        self._event_factory = event_factory.EventFactoryImpl(self)
+        self._event_manager = hikari.impl.EventManagerImpl(self._event_factory, hikari.Intents.ALL)
+        self._join_event: typing.Optional[asyncio.Event] = None
         self._rest = hikari.impl.RESTClientImpl(
             cache=None,
             entity_factory=self._entity_factory,
             executor=self._executor,
-            http_settings=...,
-            max_rate_limit=...,
-            max_retries=...,
-            proxy_settings=...,
+            http_settings=self._http_settings,
+            max_rate_limit=max_rate_limit,
+            max_retries=max_retries,
+            proxy_settings=self._proxy_settings,
             token=token,
             token_type=hikari.TokenType.BOT,
-            rest_url=None,
+            rest_url=discord_url,
         )
 
     @property
@@ -85,16 +132,20 @@ class MQBot(
         return self._event_manager
 
     @property
-    def executor(self) -> hikari.api.Executor:
+    def executor(self) -> typing.Optional[futures.Executor]:
         return self._executor
 
     @property
     def http_settings(self) -> hikari.config.HTTPSettings:
-        return super().http_settings
+        return self._http_settings
+
+    @property
+    def intents(self) -> hikari.Intents:
+        return self._intents
 
     @property
     def proxy_settings(self) -> hikari.config.ProxySettings:
-        return super().proxy_settings
+        return self._proxy_settings
 
     @property
     def rest(self) -> hikari.api.RESTClient:
@@ -104,22 +155,39 @@ class MQBot(
 
     @property
     def heartbeat_latencies(self) -> typing.Mapping[int, float]:
-        ...
+        return {s.id: s.heartbeat_latency for s in self._shards.values()}
 
     @property
     def heartbeat_latency(self) -> float:
-        ...
+        latancies = [s.heartbeat_latency for s in self._shards.values()]
+        return sum(latancies) / len(latancies) if latancies else float("nan")
 
     @property
     def shards(self) -> typing.Mapping[int, hikari.api.GatewayShard]:
-        ...
+        return self._shards.copy()
 
     @property
     def shard_count(self) -> int:
-        ...
+        return self._shard_count  # TODO: update this with data received from the manager
+
+    @classmethod
+    def zmq(cls) -> MQBot:
+        raise NotImplementedError
 
     def get_me(self) -> typing.Optional[hikari.OwnUser]:
-        return None
+        return self._me
+
+    def _make_shard(self, shard_id: int, /) -> shards_.Shard:
+        return shards_.Shard(
+            receiver=self._receiver,
+            shard_id=shard_id,
+            shard_count=self._shard_count,
+            intents=self.intents,
+            user_id=hikari.Snowflake(0),
+        )
+
+    async def _sync_gateway_info(self) -> None:
+        ...
 
     async def update_presence(
         self,
@@ -129,7 +197,7 @@ class MQBot(
         activity: hikari.UndefinedNoneOr[hikari.Activity] = hikari.UNDEFINED,
         afk: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
     ) -> None:
-        ...
+        raise NotImplementedError
 
     async def update_voice_state(
         self,
@@ -139,7 +207,7 @@ class MQBot(
         self_mute: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
         self_deaf: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
     ) -> None:
-        ...
+        raise NotImplementedError
 
     async def request_guild_members(
         self,
@@ -151,22 +219,114 @@ class MQBot(
         users: hikari.UndefinedOr[hikari.SnowflakeishSequence[hikari.User]] = hikari.UNDEFINED,
         nonce: hikari.UndefinedOr[str] = hikari.UNDEFINED,
     ) -> None:
-        ...
+        raise NotImplementedError
 
     #  Runnable
 
     @property
     def is_alive(self) -> bool:
-        ...
+        return self._is_alive
 
     async def close(self) -> None:
-        ...
+        if not self._is_alive:
+            raise RuntimeError("Cannot close a bot that is not alive.")
+
+        if self._is_closing:
+            return await self.join()
+
+        self._is_closing = True
+        await self._receiver.disconnect()
+        await self._rest.close()
+        self._is_alive = False
+        self._is_closing = False
 
     async def join(self) -> None:
-        ...
+        if not self._is_alive:
+            raise RuntimeError("Bot is not running")
+
+        if not self._join_event:
+            self._join_event = asyncio.Event()
+
+        await self._join_event.wait()
 
     def run(self) -> None:
-        ...
+        if self._is_alive:
+            raise RuntimeError("Bot is already running")
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self.start())
+        loop.run_until_complete(self.join())
 
     async def start(self) -> None:
-        ...
+        if self._is_alive:
+            raise RuntimeError("Bot is already running")
+
+        self._is_alive = True
+        self._rest.start()
+        await self._receiver.connect(self._on_event)
+
+    def _on_event(self, shard_id: int, event_name: str, payload: bytes, /) -> None:
+        try:
+            shard = self._shards[shard_id]
+        except KeyError:
+            shard = self._shards[shard_id] = self._make_shard(shard_id)
+
+        # TODO: only deserialize json if registered listener
+        self._event_manager.consume_raw_event(event_name, shard, json.loads(payload)["d"])
+
+    # hikari.api.EventManager
+
+    def consume_raw_event(
+        self, event_name: str, shard: hikari.api.GatewayShard, payload: dict[str, typing.Any]
+    ) -> None:
+        return self._event_manager.consume_raw_event(event_name, shard, payload)
+
+    def dispatch(self, event: hikari.Event) -> asyncio.Future[typing.Any]:
+        return self._event_manager.dispatch(event)
+
+    def subscribe(
+        self, event_type: typing.Type[event_manager_api.EventT], callback: event_manager_api.CallbackT[typing.Any]
+    ) -> None:
+        return self._event_manager.subscribe(event_type, callback)
+
+    def unsubscribe(
+        self, event_type: typing.Type[event_manager_api.EventT], callback: event_manager_api.CallbackT[typing.Any]
+    ) -> None:
+        return self._event_manager.unsubscribe(event_type, callback)
+
+    def get_listeners(
+        self,
+        event_type: typing.Type[event_manager_api.EventT],
+        /,
+        *,
+        polymorphic: bool = True,
+    ) -> typing.Collection[event_manager_api.CallbackT[event_manager_api.EventT]]:
+        return self._event_manager.get_listeners(event_type, polymorphic=polymorphic)
+
+    def listen(
+        self,
+        event_type: typing.Optional[typing.Type[event_manager_api.EventT]] = None,
+    ) -> typing.Callable[
+        [event_manager_api.CallbackT[event_manager_api.EventT]],
+        event_manager_api.CallbackT[event_manager_api.EventT_co],
+    ]:
+        return self._event_manager.listen(event_type)
+
+    def stream(
+        self,
+        event_type: typing.Type[event_manager_api.EventT],
+        /,
+        timeout: typing.Union[float, int, None],
+        limit: typing.Optional[int] = None,
+    ) -> event_manager_api.EventStream[event_manager_api.EventT]:
+        return self._event_manager.stream(event_type, timeout=timeout, limit=limit)
+
+    def wait_for(
+        self,
+        event_type: typing.Type[event_manager_api.EventT],
+        /,
+        timeout: typing.Union[float, int, None],
+        predicate: typing.Optional[event_manager_api.PredicateT[event_manager_api.EventT]] = None,
+    ) -> typing.Coroutine[typing.Any, typing.Any, event_manager_api.EventT]:
+        return self._event_manager.wait_for(event_type, timeout=timeout, predicate=predicate)
