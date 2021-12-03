@@ -34,6 +34,7 @@ from __future__ import annotations
 __all__ = ["EventManager"]
 
 import asyncio
+import json
 import typing
 
 import hikari.iterators
@@ -49,6 +50,8 @@ if typing.TYPE_CHECKING:
     from . import receivers
 
     _EventStreamT = typing.TypeVar("_EventStreamT", bound="EventStream[typing.Any]")
+
+_DATA_KEY = "d"
 
 
 class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
@@ -227,6 +230,7 @@ for _event_type, _names in _EVENT_TO_NAMES.copy().items():
                 if _name not in _other_names:
                     _other_names.append(_name)
 
+
 class _EventConverter:
     __slots__ = ("_event_factory", "_name_to_converter")
 
@@ -317,7 +321,7 @@ class _EventConverter:
 
     def get_converter(
         self, event_name: str
-    ) -> typing.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]:
+    ) -> collections.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]:
         return self._name_to_converter[event_name]
 
 
@@ -341,20 +345,20 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
             str, list[tuple[asyncio.Future[hikari.Event], typing.Optional[event_manager_api.PredicateT[typing.Any]]]]
         ] = {}
 
-    def consume_pipeline_event(
-        self, event_name: str, shard: hikari.api.GatewayShard, payload: dict[str, typing.Any], /
-    ) -> None:
+    @staticmethod
+    def _unjsonify(data: bytes) -> dict[str, typing.Any]:
+        return json.loads(data)[_DATA_KEY]
+
+    def consume_pipeline_event(self, event_name: str, shard: hikari.api.GatewayShard, data: bytes, /) -> None:
         if listeners := self.__listeners.get(event_name):
-            event = self.__converter.get_converter(event_name)(shard, payload)
+            event = self.__converter.get_converter(event_name)(shard, self._unjsonify(data))
             asyncio.gather(*(self._invoke_callback(callback, event) for callback in listeners))
 
-    def consume_subbed_event(
-        self, event_name: str, shard: hikari.api.GatewayShard, payload: dict[str, typing.Any], /
-    ) -> None:
+    def consume_subbed_event(self, event_name: str, shard: hikari.api.GatewayShard, data: bytes, /) -> None:
         converter = self.__converter.get_converter(event_name)
         event: typing.Optional[hikari.Event] = None
         if streams := self.__streams.get(event_name):
-            event = converter(shard, payload)
+            event = converter(shard, self._unjsonify(data))
 
             for stream in streams:
                 stream.on_event(event)
@@ -364,7 +368,7 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
             return
 
         if not event:
-            event = converter(shard, payload)
+            event = converter(shard, self._unjsonify(data))
 
         for waiter in waiters:
             future, predicate = waiter

@@ -35,7 +35,6 @@ __all__ = ["MQBot"]
 
 import asyncio
 import datetime
-import json
 import typing
 from concurrent import futures
 
@@ -278,8 +277,7 @@ class MQBot(
         except KeyError:
             shard = self._shards[shard_id] = self._make_shard(shard_id)
 
-        # TODO: only deserialize json if registered listener
-        self._event_manager.consume_pipeline_event(event_name, shard, json.loads(payload)["d"])
+        self._event_manager.consume_pipeline_event(event_name, shard, payload)
 
     def _on_subbed(self, shard_id: int, event_name: str, payload: bytes, /) -> None:
         try:
@@ -287,8 +285,7 @@ class MQBot(
         except KeyError:
             shard = self._shards[shard_id] = self._make_shard(shard_id)
 
-        # TODO: only deserialize json if registered listener
-        self._event_manager.consume_subbed_event(event_name, shard, json.loads(payload)["d"])
+        self._event_manager.consume_subbed_event(event_name, shard, payload)
 
     # hikari.api.EventManager
 
