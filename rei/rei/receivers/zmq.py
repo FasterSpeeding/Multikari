@@ -89,28 +89,49 @@ class _CountingSeamphore:
         return future
 
 
+def _process_pipeline_message(message: tuple[zmq.Frame, ...], /) -> tuple[int, str, bytes]:
+    assert len(message) == 3
+    shard_id = message[0].bytes
+    event_name = message[1].bytes
+    payload = message[2].bytes
+    assert isinstance(shard_id, bytes)
+    assert isinstance(event_name, bytes)
+    assert isinstance(payload, bytes)
+    return int(shard_id), event_name.decode(), payload
+
+
+def _process_publish_message(message: tuple[zmq.Frame, ...], /) -> tuple[int, str, bytes]:
+    assert len(message) == 2
+    topic = message[0].bytes
+    payload = message[1].bytes
+    assert isinstance(topic, bytes)
+    assert isinstance(payload, bytes)
+    event_name, shard_id = topic.split(b":", 1)
+    return int(shard_id), event_name.decode(), payload
+
+
 class ZmqReceiver(abc.AbstractReceiver):
     __slots__ = (
         "_ctx",
         "_is_closing",
         "_join_semaphore",
         "_pipeline_url",
+        "_publish_url",
         "_pull_socket",
         "_pull_task",
-        "_sub_url",
         "_sub_socket",
         "_sub_task",
         "_subscriptions",
     )
 
-    def __init__(self, pipeline_url: str, sub_url: str, /) -> None:
+    def __init__(self, pipeline_url: str, publish_url: str, /) -> None:
         self._ctx = zmq.asyncio.Context()
         self._is_closing = False
         self._join_semaphore = _CountingSeamphore()
         self._pipeline_url = pipeline_url
+        self._publish_url = publish_url
         self._pull_socket: typing.Optional[zmq.asyncio.Socket] = None
         self._pull_task: typing.Optional[asyncio.Task[None]] = None
-        self._sub_url = sub_url
         self._sub_socket: typing.Optional[zmq.asyncio.Socket] = None
         self._sub_task: typing.Optional[asyncio.Task[None]] = None
         self._subscriptions: dict[str, int] = {}
@@ -127,16 +148,18 @@ class ZmqReceiver(abc.AbstractReceiver):
         self._pull_socket = self._ctx.socket(zmq.PULL)
         self._pull_socket.set_hwm(1)
         self._pull_socket.connect(self._pipeline_url)
-        self._pull_task = loop.create_task(self._dispatch_loop(self._pull_socket, dispatch_callback))
+        self._pull_task = loop.create_task(
+            self._dispatch_loop(self._pull_socket, dispatch_callback, _process_pipeline_message)
+        )
 
         self._sub_socket = self._ctx.socket(zmq.SUB)
         # self._sub_socket.set_hwm(1)
-        self._sub_socket.connect(self._sub_url)
+        self._sub_socket.connect(self._publish_url)
 
         for event_name in self._subscriptions:
             self._sub_socket.setsockopt_string(zmq.SUBSCRIBE, event_name)
 
-        self._sub_task = loop.create_task(self._dispatch_loop(self._sub_socket, sub_callback))
+        self._sub_task = loop.create_task(self._dispatch_loop(self._sub_socket, sub_callback, _process_publish_message))
 
     async def disconnect(self) -> None:
         if not self._pull_socket or not self._sub_socket:
@@ -165,11 +188,16 @@ class ZmqReceiver(abc.AbstractReceiver):
             if self._sub_socket:
                 self._sub_socket.setsockopt_string(zmq.UNSUBSCRIBE, event_name)
 
-    async def _dispatch_loop(self, socket: zmq.asyncio.Socket, callback: abc.DispatchSignature) -> None:
+    async def _dispatch_loop(
+        self,
+        socket: zmq.asyncio.Socket,
+        callback: abc.DispatchSignature,
+        process_message: collections.Callable[[tuple[zmq.Frame, ...]], tuple[int, str, bytes]],
+    ) -> None:
         with self._join_semaphore:
             while True:
                 try:
-                    message = await socket.recv_multipart(copy=False)
+                    message: tuple[zmq.Frame, ...] = await socket.recv_multipart(copy=False)
 
                 except zmq.ZMQError as exc:
                     # Indicates the socket's context was temianted.
@@ -184,13 +212,7 @@ class ZmqReceiver(abc.AbstractReceiver):
                     break
 
                 try:
-                    shard_id = message[0].bytes
-                    event_name = message[1].bytes
-                    payload = message[2].bytes
-                    assert isinstance(shard_id, bytes)
-                    assert isinstance(event_name, bytes)
-                    assert isinstance(payload, bytes)
-                    callback(int(shard_id), event_name.decode(), payload)
+                    callback(*process_message(message))
 
                 except Exception as exc:
                     _LOGGER.error("Failed to deserialize received event", exc_info=exc)

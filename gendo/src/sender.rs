@@ -40,26 +40,34 @@ pub trait Sender {
 
 pub struct ZmqSender {
     ctx: tmq::Context,
-    mq: std::sync::Arc<tokio::sync::Mutex<tmq::push::Push>>,
+    push_socket: std::sync::Arc<tokio::sync::Mutex<tmq::push::Push>>,
+    publish_socket: std::sync::Arc<tokio::sync::Mutex<tmq::publish::Publish>>,
 }
 
 impl ZmqSender {
     pub async fn build() -> Self {
-        let address =
-            utility::get_env_variable("ZMQ_ADDRESS").expect("Missing ZMQ_ADDRESS env variable");
+        let pipeline_address = utility::get_env_variable("ZMQ_PIPELINE_ADDRESS")
+            .expect("Missing ZMQ_PIPELINE_ADDRESS env variable");
+        let publish_address = utility::get_env_variable("ZMQ_PUBLISH_ADDRESS")
+            .expect("Missing ZMQ_PUBLISH_ADDRESS env variable");
         // let curve_server = utility::get_env_variable("ZMQ_CURVE_SERVER")
         //     .expect("Missing ZMQ_CURVE_SERVER env variable");
 
         let ctx = tmq::Context::new();
+        let push_socket = tmq::push::push(&ctx)
+            .bind(&pipeline_address)
+            .expect("Failed to connect to ZMQ pipeline queue");
         // .set_curve_server(&curve_server)
         // set_backlog
-        let mq = tmq::push::push(&ctx)
-            // .connect(&address)
-            .bind(&address)
-            .expect("Failed to connect to ZMQ message queue");
+
+        let publish_socket = tmq::publish::publish(&ctx)
+            .bind(&publish_address)
+            .expect("Failed to connect to ZMQ publish queue");
+
         Self {
             ctx,
-            mq: std::sync::Arc::from(tokio::sync::Mutex::from(mq)),
+            push_socket: std::sync::Arc::from(tokio::sync::Mutex::from(push_socket)),
+            publish_socket: std::sync::Arc::from(tokio::sync::Mutex::from(publish_socket)),
         }
     }
 }
@@ -67,11 +75,18 @@ impl ZmqSender {
 #[async_trait]
 impl Sender for ZmqSender {
     async fn consume_event(&self, shard_id: u64, event_name: &str, event: &str) {
-        self.mq
+        self.push_socket
             .lock()
             .await
             .send(vec![&format!("{}", shard_id) as &str, event_name, event])
             .await
-            .unwrap(); // TODO:  e rror handling
+            .unwrap(); // TODO:  error handling
+
+        self.publish_socket
+            .lock()
+            .await
+            .send(vec![&format!("{}:{}", event_name, shard_id) as &str, event])
+            .await
+            .unwrap();
     }
 }
