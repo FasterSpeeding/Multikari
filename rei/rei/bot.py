@@ -321,7 +321,7 @@ class MQBot(
         event_type: typing.Optional[type[event_manager_api.EventT]] = None,
     ) -> collections.Callable[
         [event_manager_api.CallbackT[event_manager_api.EventT]],
-        event_manager_api.CallbackT[event_manager_api.EventT_co],
+        event_manager_api.CallbackT[event_manager_api.EventT],
     ]:
         return self._event_manager.listen(event_type)
 
