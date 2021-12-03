@@ -89,6 +89,7 @@ class MQBot(
         proxy_settings: typing.Optional[hikari.config.ProxySettings] = None,
         discord_url: typing.Optional[str] = None,
     ) -> None:
+        # TODO: logging stuff?
         self._intents = hikari.Intents.NONE
         self._is_alive = False
         self._is_closing = False
@@ -239,6 +240,8 @@ class MQBot(
         await self._rest.close()
         self._is_alive = False
         self._is_closing = False
+        if self._join_event:
+            self._join_event.set()
 
     async def join(self) -> None:
         if not self._is_alive:
