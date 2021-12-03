@@ -48,17 +48,17 @@ class AbstractReceiver(abc.ABC):
         ...
 
     @abc.abstractmethod
-    async def connect(self, dispatch_callback: DispatchSignature, /) -> None:
+    async def connect(self, dispatch_callback: DispatchSignature, sub_callback: DispatchSignature, /) -> None:
         ...
 
     @abc.abstractmethod
     async def disconnect(self) -> None:
         ...
 
-    # @abc.abstractmethod
-    # async def wait_for(self)  -> None:
-    #     ...
+    @abc.abstractmethod
+    def subscribe(self, event_name: str, /) -> None:
+        ...
 
-    # @abc.abstractmethod
-    # async def stream(self) ->  None:
-    #     ...
+    @abc.abstractmethod
+    def unsubscribe(self, event_name: str, /) -> None:
+        ...

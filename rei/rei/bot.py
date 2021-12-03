@@ -44,10 +44,13 @@ import hikari.config
 import hikari.traits
 from hikari.impl import event_factory
 
+from . import event_manager
 from . import receivers
 from . import shards as shards_
 
 if typing.TYPE_CHECKING:
+    from collections import abc as collections
+
     from hikari.api import event_manager as event_manager_api
 
 
@@ -105,7 +108,7 @@ class MQBot(
 
         self._entity_factory = hikari.impl.EntityFactoryImpl(self)
         self._event_factory = event_factory.EventFactoryImpl(self)
-        self._event_manager = hikari.impl.EventManagerImpl(self._event_factory, hikari.Intents.ALL)
+        self._event_manager = event_manager.EventManager(self._receiver, self._event_factory, hikari.Intents.ALL)
         self._join_event: typing.Optional[asyncio.Event] = None
         self._rest = hikari.impl.RESTClientImpl(
             cache=None,
@@ -155,7 +158,7 @@ class MQBot(
     # ShardAware
 
     @property
-    def heartbeat_latencies(self) -> typing.Mapping[int, float]:
+    def heartbeat_latencies(self) -> collections.Mapping[int, float]:
         return {s.id: s.heartbeat_latency for s in self._shards.values()}
 
     @property
@@ -164,7 +167,7 @@ class MQBot(
         return sum(latancies) / len(latancies) if latancies else float("nan")
 
     @property
-    def shards(self) -> typing.Mapping[int, hikari.api.GatewayShard]:
+    def shards(self) -> collections.Mapping[int, hikari.api.GatewayShard]:
         return self._shards.copy()
 
     @property
@@ -267,16 +270,25 @@ class MQBot(
 
         self._is_alive = True
         self._rest.start()
-        await self._receiver.connect(self._on_event)
+        await self._receiver.connect(self._on_pipeline, self._on_subbed)
 
-    def _on_event(self, shard_id: int, event_name: str, payload: bytes, /) -> None:
+    def _on_pipeline(self, shard_id: int, event_name: str, payload: bytes, /) -> None:
         try:
             shard = self._shards[shard_id]
         except KeyError:
             shard = self._shards[shard_id] = self._make_shard(shard_id)
 
         # TODO: only deserialize json if registered listener
-        self._event_manager.consume_raw_event(event_name, shard, json.loads(payload)["d"])
+        self._event_manager.consume_pipeline_event(event_name, shard, json.loads(payload)["d"])
+
+    def _on_subbed(self, shard_id: int, event_name: str, payload: bytes, /) -> None:
+        try:
+            shard = self._shards[shard_id]
+        except KeyError:
+            shard = self._shards[shard_id] = self._make_shard(shard_id)
+
+        # TODO: only deserialize json if registered listener
+        self._event_manager.consume_subbed_event(event_name, shard, json.loads(payload)["d"])
 
     # hikari.api.EventManager
 
@@ -289,28 +301,28 @@ class MQBot(
         return self._event_manager.dispatch(event)
 
     def subscribe(
-        self, event_type: typing.Type[event_manager_api.EventT], callback: event_manager_api.CallbackT[typing.Any]
+        self, event_type: type[event_manager_api.EventT], callback: event_manager_api.CallbackT[typing.Any]
     ) -> None:
         return self._event_manager.subscribe(event_type, callback)
 
     def unsubscribe(
-        self, event_type: typing.Type[event_manager_api.EventT], callback: event_manager_api.CallbackT[typing.Any]
+        self, event_type: type[event_manager_api.EventT], callback: event_manager_api.CallbackT[typing.Any]
     ) -> None:
         return self._event_manager.unsubscribe(event_type, callback)
 
     def get_listeners(
         self,
-        event_type: typing.Type[event_manager_api.EventT],
+        event_type: type[event_manager_api.EventT],
         /,
         *,
         polymorphic: bool = True,
-    ) -> typing.Collection[event_manager_api.CallbackT[event_manager_api.EventT]]:
+    ) -> collections.Collection[event_manager_api.CallbackT[event_manager_api.EventT]]:
         return self._event_manager.get_listeners(event_type, polymorphic=polymorphic)
 
     def listen(
         self,
-        event_type: typing.Optional[typing.Type[event_manager_api.EventT]] = None,
-    ) -> typing.Callable[
+        event_type: typing.Optional[type[event_manager_api.EventT]] = None,
+    ) -> collections.Callable[
         [event_manager_api.CallbackT[event_manager_api.EventT]],
         event_manager_api.CallbackT[event_manager_api.EventT_co],
     ]:
@@ -318,7 +330,7 @@ class MQBot(
 
     def stream(
         self,
-        event_type: typing.Type[event_manager_api.EventT],
+        event_type: type[event_manager_api.EventT],
         /,
         timeout: typing.Union[float, int, None],
         limit: typing.Optional[int] = None,
@@ -327,9 +339,9 @@ class MQBot(
 
     def wait_for(
         self,
-        event_type: typing.Type[event_manager_api.EventT],
+        event_type: type[event_manager_api.EventT],
         /,
         timeout: typing.Union[float, int, None],
         predicate: typing.Optional[event_manager_api.PredicateT[event_manager_api.EventT]] = None,
-    ) -> typing.Coroutine[typing.Any, typing.Any, event_manager_api.EventT]:
+    ) -> collections.Coroutine[typing.Any, typing.Any, event_manager_api.EventT]:
         return self._event_manager.wait_for(event_type, timeout=timeout, predicate=predicate)

@@ -38,10 +38,13 @@ __all__: list[str] = [
     # ./bot.py
     "bot",
     "MQBot",
+    # ./event_manager.py
+    "event_manager",
     # ./shards.py
     "shards",
 ]
 
+from . import event_manager
 from . import receivers
 from . import shards
 from .bot import MQBot

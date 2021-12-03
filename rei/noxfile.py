@@ -37,7 +37,7 @@ import tempfile
 import nox
 
 nox.options.sessions = ["reformat", "lint", "spell-check", "type-check", "test", "verify-types"]  # type: ignore
-GENERAL_TARGETS = ["./noxfile.py", "./src", "./tests"]
+GENERAL_TARGETS = ["./noxfile.py", "./rei", "./tests"]
 PYTHON_VERSIONS = ["3.9", "3.10"]  # TODO: @nox.session(python=["3.6", "3.7", "3.8"])?
 
 
@@ -84,7 +84,7 @@ def check_versions(session: nox.Session) -> None:
 
         required_version = _try_find_option(session, "--required-version", "-r")
         args = ["--required-version", required_version] if required_version else []
-        session.run("python", file.name, "-r", "src", *args)
+        session.run("python", file.name, "-r", "rei", *args)
 
     finally:
         pathlib.Path(file.name).unlink(missing_ok=False)
@@ -126,7 +126,7 @@ def generate_docs(session: nox.Session) -> None:
     install_requirements(session, ".[docs]")
     session.log("Building docs into ./docs")
     output_directory = _try_find_option(session, "-o", "--output") or "./docs"
-    session.run("pdoc", "--docformat", "numpy", "-o", output_directory, "./src", "-t", "./templates")
+    session.run("pdoc", "--docformat", "numpy", "-o", output_directory, "./rei", "-t", "./templates")
     session.log("Docs generated: %s", pathlib.Path("./docs/index.html").absolute())
 
     if not _try_find_option(session, "-j", "--json", when_empty="true"):
@@ -148,7 +148,7 @@ def generate_docs(session: nox.Session) -> None:
         with file:
             file.write(code)
 
-        session.run("python", file.name, "src", "-o", str(pathlib.Path(output_directory) / "search.json"))
+        session.run("python", file.name, "rei", "-o", str(pathlib.Path(output_directory) / "search.json"))
 
     finally:
         pathlib.Path(file.name).unlink(missing_ok=False)
@@ -245,7 +245,7 @@ def test_coverage(session: nox.Session) -> None:
     install_requirements(session, ".[tests]")
     # TODO: can import-mode be specified in the config.
     # https://github.com/nedbat/coveragepy/issues/1002
-    session.run("pytest", "--cov=src", "--cov-report", "html:coverage_html", "--cov-report", "xml:coverage.xml")
+    session.run("pytest", "--cov=rei", "--cov-report", "html:coverage_html", "--cov-report", "xml:coverage.xml")
 
 
 def _run_pyright(session: nox.Session, *args: str) -> None:
@@ -270,7 +270,7 @@ def type_check(session: nox.Session) -> None:
 def verify_types(session: nox.Session) -> None:
     """Verify the "type completeness" of types exported by the library using Pyright."""
     install_requirements(session, ".[type_checking]")
-    _run_pyright(session, "--verifytypes", "src", "--ignoreexternal")
+    _run_pyright(session, "--verifytypes", "rei", "--ignoreexternal")
 
 
 @nox.session(name="check-dependencies")
