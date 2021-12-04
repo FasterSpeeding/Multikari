@@ -149,7 +149,7 @@ class ZmqReceiver(abc.AbstractReceiver):
         self._pull_socket.set_hwm(1)
         self._pull_socket.connect(self._pipeline_url)
         self._pull_task = loop.create_task(
-            self._dispatch_loop(self._pull_socket, dispatch_callback, _process_pipeline_message)
+            self._dispatch_loop(self._pull_socket, dispatch_callback, _process_pipeline_message, self._rm_pull_task)
         )
 
         self._sub_socket = self._ctx.socket(zmq.SUB)
@@ -159,7 +159,15 @@ class ZmqReceiver(abc.AbstractReceiver):
         for event_name in self._subscriptions:
             self._sub_socket.setsockopt_string(zmq.SUBSCRIBE, event_name)
 
-        self._sub_task = loop.create_task(self._dispatch_loop(self._sub_socket, sub_callback, _process_publish_message))
+        self._sub_task = loop.create_task(
+            self._dispatch_loop(self._sub_socket, sub_callback, _process_publish_message, self._rm_pull_task)
+        )
+
+    def _rm_pull_task(self):
+        self._pull_task = None
+
+    def _rm_sub_task(self):
+        self._sub_task = None
 
     async def disconnect(self) -> None:
         if not self._pull_socket or not self._sub_socket:
@@ -193,6 +201,7 @@ class ZmqReceiver(abc.AbstractReceiver):
         socket: zmq.asyncio.Socket,
         callback: abc.DispatchSignature,
         process_message: collections.Callable[[tuple[zmq.Frame, ...]], tuple[int, str, bytes]],
+        on_close: collections.Callable[[], None],
     ) -> None:
         with self._join_semaphore:
             while True:
@@ -217,10 +226,10 @@ class ZmqReceiver(abc.AbstractReceiver):
                 except Exception as exc:
                     _LOGGER.error("Failed to deserialize received event", exc_info=exc)
 
-            self._pull_task = None
+            on_close()
 
     async def _join(self) -> None:
-        if not self._pull_task:
+        if not self._pull_task and not self._sub_task:
             raise RuntimeError("Not connected")
 
         if self._join_semaphore.is_acquired:
