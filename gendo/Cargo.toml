@@ -21,7 +21,7 @@ path = "../shared"
 
 [dependencies.tmq]
 # features = ["zmq-vendored"]
-version = "0.3.0"
+version = "0.3.0"  #  Obviously needs ZMQ to be installed
 
 [dependencies.tokio]
 features = ["macros", "rt-multi-thread"]

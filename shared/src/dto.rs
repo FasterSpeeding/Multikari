@@ -47,31 +47,31 @@ pub struct GuildRequestMembers {
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    query:     Option<String>,
+    pub query:     Option<String>,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    limit:     Option<u64>,
+    pub limit:     Option<u64>,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    presences: Option<bool>,
+    pub presences: Option<bool>,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    user_ids:  Option<Vec<u64>>, //  TODO: is there a length limit here lol?
+    pub user_ids:  Option<Vec<u64>>, //  TODO: is there a length limit here lol?
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    nonce:     Option<String>,
+    pub nonce:     Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -82,19 +82,19 @@ pub struct VoiceStateUpdate {
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    channel_id: Option<Option<u64>>,
+    pub channel_id: Option<Option<u64>>,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    self_mute:  Option<bool>,
+    pub self_mute:  Option<bool>,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    self_deaf:  Option<bool>,
+    pub self_deaf:  Option<bool>,
 }
 
 #[repr(i8)]
@@ -109,22 +109,22 @@ pub enum ActivityType {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Activity {
-    name:   String,
-    r#type: ActivityType,
+    pub name:   String,
+    pub r#type: ActivityType,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    url:    Option<Option<String>>, // TODO: what happens if url is null for a type which doesn't take url?
+    pub url:    Option<Option<String>>, // TODO: what happens if url is null for a type which doesn't take url?
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PresenceUpdate {
     // TODO: can this just not be included?
-    since:      Option<u64>,
-    activities: Vec<Activity>,
-    status:     String, // TODO: VERIFY VALIDITY
+    pub since:      Option<u64>,
+    pub activities: Vec<Activity>, // TODO: what's the max amount?
+    pub status:     String,
     #[serde(default)] // TODO: is this optional on the actual api?
-    afk:        bool, //  TODO: also what happens if this isn't included and they're already afk?
+    pub afk:        bool, //  TODO: also what happens if this isn't included and they're already afk?
 }

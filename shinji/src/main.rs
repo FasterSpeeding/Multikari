@@ -28,53 +28,123 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-use actix_web::http::header::HttpDate;
-use actix_web::{get, patch, post, web, HttpRequest, HttpResponse};
+use std::result::Result;
+use std::sync::Arc;
+
+use actix_web::error::InternalError;
+use actix_web::http::StatusCode;
+use actix_web::{get, patch, post, web, App, HttpRequest, HttpResponse, HttpServer};
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use shared::dto;
+mod orchestrator;
 
 #[get("/shards/{shard_id}")]
-async fn get_shard_by_id(req: HttpRequest, shard_id: web::Path<u64>) -> HttpResponse {
-    HttpResponse::Ok().finish()
+async fn get_shard_by_id(
+    shard_id: web::Path<u64>,
+    orchestrator: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+) -> Result<HttpResponse, InternalError<&'static str>> {
+    Ok(HttpResponse::NoContent().finish())
 }
 
 #[get("/shards")]
-async fn get_shards(req: HttpRequest) -> HttpResponse {
-    HttpResponse::Ok().finish()
-}
-
-#[post("/guilds/{guild_id}/request_members")]
-async fn request_members(
-    req: HttpRequest,
-    guild_id: web::Path<u64>,
-    data: web::Json<dto::GuildRequestMembers>,
-) -> HttpResponse {
-    HttpResponse::Ok().finish()
-}
-
-#[patch("/guilds/{guild_id}/voice_state")]
-async fn patch_guild_voice_state(
-    req: HttpRequest,
-    guild_id: web::Path<u64>,
-    status: web::Json<dto::VoiceStateUpdate>,
-) -> HttpResponse {
-    HttpResponse::Ok().finish()
-}
-
-#[patch("/presences")]
-async fn patch_presences(req: HttpRequest, body: web::Json<dto::PresenceUpdate>) -> HttpResponse {
-    HttpResponse::Ok().finish()
+async fn get_shards(
+    orchestrator: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+) -> Result<HttpResponse, InternalError<&'static str>> {
+    Ok(HttpResponse::NoContent().finish())
 }
 
 #[patch("/shards/{shard_id}/presence")]
 async fn patch_shard_presence(
-    req: HttpRequest,
     shard_id: web::Path<u64>,
-    body: web::Json<dto::PresenceUpdate>,
-) -> HttpResponse {
-    HttpResponse::Ok().finish()
+    data: web::Json<dto::PresenceUpdate>,
+    orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+) -> Result<HttpResponse, InternalError<&'static str>> {
+    // TODO: are these case-sensitive?
+    if !["online", "dnd", "idle", "invisibile", "offline"].contains(&data.status.as_ref()) {
+        return Err(InternalError::new("Invalid presence status", StatusCode::BAD_REQUEST));
+    };
+
+    // Since this was parsed from Json, we can assume it's valid Json.
+    let json = serde_json::value::to_value(&data.into_inner()).unwrap();
+    orch.send_to_shard(shard_id.into_inner(), json.to_string().as_bytes())
+        .await
+        .map_err(|e| e.to_response())?;
+
+    Ok(HttpResponse::NoContent().finish())
 }
 
-fn main() {
+#[post("/guilds/{guild_id}/request_members")]
+async fn request_members(
+    guild_id: web::Path<u64>,
+    data: web::Json<dto::GuildRequestMembers>,
+    orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+) -> Result<HttpResponse, InternalError<&'static str>> {
+    let guild_id = guild_id.into_inner();
+    let shard_id = orch.get_guild_shard(guild_id);
+
+    // Since this was parsed from Json, we can assume it's valid Json.
+    let mut json = serde_json::value::to_value(&data.into_inner()).unwrap();
+    json["guild_id"] = guild_id.into();
+
+    orch.send_to_shard(shard_id, json.to_string().as_bytes())
+        .await
+        .map_err(|e| e.to_response())?;
+
+    Ok(HttpResponse::NoContent().finish())
+}
+
+#[patch("/guilds/{guild_id}/voice_state")]
+async fn patch_guild_voice_state(
+    guild_id: web::Path<u64>,
+    data: web::Json<dto::VoiceStateUpdate>,
+    orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+) -> Result<HttpResponse, InternalError<&'static str>> {
+    let guild_id = guild_id.into_inner();
+    let shard_id = orch.get_guild_shard(guild_id);
+
+    // Since this was parsed from Json, we can assume it's valid Json.
+    let mut json = serde_json::value::to_value(&data.into_inner()).unwrap();
+    json["guild_id"] = guild_id.into();
+
+    orch.send_to_shard(shard_id, json.to_string().as_bytes())
+        .await
+        .map_err(|e| e.to_response())?;
+
+    Ok(HttpResponse::NoContent().finish())
+}
+
+async fn actix_main() -> std::io::Result<()> {
+    let ssl_key = shared::get_env_variable("SSL_KEY").expect("Missing SSL_KEY env variable");
+    let ssl_cert = shared::get_env_variable("SSL_CERT").expect("Missing SSL_SERT env variable");
+    let url = shared::get_env_variable("URL").expect("Missing URL env variable");
+
+    let mut ssl_acceptor =
+        SslAcceptor::mozilla_intermediate(SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
+    ssl_acceptor
+        .set_private_key_file(&ssl_key, SslFiletype::PEM)
+        .expect("Couldn't process private key file");
+    ssl_acceptor
+        .set_certificate_chain_file(&ssl_cert)
+        .expect("Couldn't process certificate file");
+    let orch = orchestrator::ZmqOrchestrator::new();
+
+    HttpServer::new(move || {
+        App::new()
+            .app_data(web::Data::new(
+                Arc::from(orch.clone()) as Arc<dyn orchestrator::Orchestrator>
+            ))
+            .service(get_shard_by_id)
+            .service(get_shards)
+            .service(request_members)
+            .service(patch_guild_voice_state)
+            .service(patch_shard_presence)
+    })
+    .bind_openssl(&url, ssl_acceptor)?
+    .run()
+    .await
+}
+
+fn main() -> std::io::Result<()> {
     let dotenv_result = shared::load_env();
     shared::setup_logging();
 
@@ -82,5 +152,11 @@ fn main() {
         log::info!("Couldn't load .env file: {}", error);
     }
 
-    println!("Hello, world!");
+    actix_web::rt::System::with_tokio_rt(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+    })
+    .block_on(actix_main())
 }
