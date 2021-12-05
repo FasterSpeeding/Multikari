@@ -1,0 +1,2 @@
+[workspace]
+members = ["gendo", "shared", "shinji"]

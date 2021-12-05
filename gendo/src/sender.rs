@@ -31,26 +31,24 @@
 use async_trait::async_trait;
 use futures::SinkExt;
 
-use crate::utility;
-
 #[async_trait]
 pub trait Sender {
     async fn consume_event(&self, shard_id: u64, event_name: &str, event: &str);
 }
 
 pub struct ZmqSender {
-    ctx: tmq::Context,
-    push_socket: std::sync::Arc<tokio::sync::Mutex<tmq::push::Push>>,
+    ctx:            tmq::Context,
+    push_socket:    std::sync::Arc<tokio::sync::Mutex<tmq::push::Push>>,
     publish_socket: std::sync::Arc<tokio::sync::Mutex<tmq::publish::Publish>>,
 }
 
 impl ZmqSender {
     pub async fn build() -> Self {
-        let pipeline_address = utility::get_env_variable("ZMQ_PIPELINE_ADDRESS")
-            .expect("Missing ZMQ_PIPELINE_ADDRESS env variable");
-        let publish_address = utility::get_env_variable("ZMQ_PUBLISH_ADDRESS")
-            .expect("Missing ZMQ_PUBLISH_ADDRESS env variable");
-        // let curve_server = utility::get_env_variable("ZMQ_CURVE_SERVER")
+        let pipeline_address =
+            shared::get_env_variable("ZMQ_PIPELINE_ADDRESS").expect("Missing ZMQ_PIPELINE_ADDRESS env variable");
+        let publish_address =
+            shared::get_env_variable("ZMQ_PUBLISH_ADDRESS").expect("Missing ZMQ_PUBLISH_ADDRESS env variable");
+        // let curve_server = shared::get_env_variable("ZMQ_CURVE_SERVER")
         //     .expect("Missing ZMQ_CURVE_SERVER env variable");
 
         let ctx = tmq::Context::new();

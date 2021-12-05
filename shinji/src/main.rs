@@ -28,15 +28,53 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-use std::str::FromStr;
+use actix_web::http::header::HttpDate;
+use actix_web::{get, patch, post, web, HttpRequest, HttpResponse};
+use shared::dto;
 
-use futures_util::StreamExt;
-use twilight_gateway::{cluster, Event, EventTypeFlags, Intents};
-mod sender;
-use sender::Sender;
+#[get("/shards/{shard_id}")]
+async fn get_shard_by_id(req: HttpRequest, shard_id: web::Path<u64>) -> HttpResponse {
+    HttpResponse::Ok().finish()
+}
 
-#[tokio::main]
-async fn main() {
+#[get("/shards")]
+async fn get_shards(req: HttpRequest) -> HttpResponse {
+    HttpResponse::Ok().finish()
+}
+
+#[post("/guilds/{guild_id}/request_members")]
+async fn request_members(
+    req: HttpRequest,
+    guild_id: web::Path<u64>,
+    data: web::Json<dto::GuildRequestMembers>,
+) -> HttpResponse {
+    HttpResponse::Ok().finish()
+}
+
+#[patch("/guilds/{guild_id}/voice_state")]
+async fn patch_guild_voice_state(
+    req: HttpRequest,
+    guild_id: web::Path<u64>,
+    status: web::Json<dto::VoiceStateUpdate>,
+) -> HttpResponse {
+    HttpResponse::Ok().finish()
+}
+
+#[patch("/presences")]
+async fn patch_presences(req: HttpRequest, body: web::Json<dto::PresenceUpdate>) -> HttpResponse {
+    HttpResponse::Ok().finish()
+}
+
+#[patch("/shards/{shard_id}/presence")]
+async fn patch_shard_presence(
+    req: HttpRequest,
+    shard_id: web::Path<u64>,
+    body: web::Json<dto::PresenceUpdate>,
+) -> HttpResponse {
+    HttpResponse::Ok().finish()
+}
+
+fn main() {
     let dotenv_result = shared::load_env();
     shared::setup_logging();
 
@@ -44,43 +82,5 @@ async fn main() {
         log::info!("Couldn't load .env file: {}", error);
     }
 
-    let token = shared::get_env_variable("DISCORD_TOKEN").expect("DISCORD_TOKEN env variable not found");
-    let intents = match shared::get_env_variable("DISCORD_INTENTS").map(|v| u64::from_str(&v).map(Intents::from_bits)) {
-        Some(Ok(Some(intents))) => intents,
-        None => Intents::all() & !(Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES),
-        _ => panic!("Invalid INTENTS value in env variables"),
-    };
-
-    let sender = sender::ZmqSender::build().await;
-
-    let (cluster, mut events) = cluster::Cluster::builder(token, intents)
-        .event_types(EventTypeFlags::SHARD_PAYLOAD)
-        .build()
-        .await
-        .expect("Failed to make gateway connection");
-
-    let cluster = std::sync::Arc::new(cluster);
-
-    tokio::spawn(async move {
-        cluster.clone().up().await;
-    });
-
-    while let Some(event) = events.next().await {
-        let (shard_id, event) = match event {
-            (shard_id, Event::ShardPayload(payload)) => (shard_id, payload),
-            _ => continue,
-        };
-        let payload = std::str::from_utf8(&event.bytes);
-
-        if payload.is_err() {
-            continue;
-        }
-        let payload = payload.unwrap();
-
-        if let Some(event) = twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(payload) {
-            if let Some(event_type) = event.event_type_ref() {
-                sender.consume_event(shard_id, event_type, payload).await;
-            }
-        }
-    }
+    println!("Hello, world!");
 }

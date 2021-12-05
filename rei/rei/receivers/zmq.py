@@ -209,7 +209,7 @@ class ZmqReceiver(abc.AbstractReceiver):
                     message: tuple[zmq.Frame, ...] = await socket.recv_multipart(copy=False)
 
                 except zmq.ZMQError as exc:
-                    # Indicates the socket's context was temianted.
+                    # Indicates the socket or its context was termianted.
                     if exc.errno in (zmq.ETERM, zmq.ENOTSOCK):
                         _LOGGER.error("Socket closed with {}: {}", exc.errno, exc.strerror)
                         break

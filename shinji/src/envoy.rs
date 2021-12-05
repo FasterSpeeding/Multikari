@@ -28,7 +28,3 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-
-pub fn get_env_variable(key: &str) -> Option<String> {
-    dotenv::var(key).or_else(|_| std::env::var(key)).ok()
-}
