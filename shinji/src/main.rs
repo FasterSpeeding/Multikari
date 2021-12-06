@@ -114,21 +114,14 @@ async fn patch_guild_voice_state(
 }
 
 async fn actix_main() -> std::io::Result<()> {
-    let ssl_key = shared::get_env_variable("SSL_KEY").expect("Missing SSL_KEY env variable");
-    let ssl_cert = shared::get_env_variable("SSL_CERT").expect("Missing SSL_SERT env variable");
+    let ssl_config = (
+        shared::get_env_variable("SSL_KEY"),
+        shared::get_env_variable("SSL_CERT"),
+    );
     let url = shared::get_env_variable("URL").expect("Missing URL env variable");
 
-    let mut ssl_acceptor =
-        SslAcceptor::mozilla_intermediate(SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
-    ssl_acceptor
-        .set_private_key_file(&ssl_key, SslFiletype::PEM)
-        .expect("Couldn't process private key file");
-    ssl_acceptor
-        .set_certificate_chain_file(&ssl_cert)
-        .expect("Couldn't process certificate file");
     let orch = orchestrator::ZmqOrchestrator::new();
-
-    HttpServer::new(move || {
+    let mut server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(
                 Arc::from(orch.clone()) as Arc<dyn orchestrator::Orchestrator>
@@ -138,10 +131,33 @@ async fn actix_main() -> std::io::Result<()> {
             .service(request_members)
             .service(patch_guild_voice_state)
             .service(patch_shard_presence)
-    })
-    .bind_openssl(&url, ssl_acceptor)?
-    .run()
-    .await
+    });
+
+    match ssl_config {
+        (Some(ssl_key), Some(ssl_cert)) => {
+            log::info!("Starting with SSL");
+            let mut ssl_acceptor =
+                SslAcceptor::mozilla_intermediate(SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
+            ssl_acceptor
+                .set_private_key_file(&ssl_key, SslFiletype::PEM)
+                .expect("Couldn't process private key file");
+            ssl_acceptor
+                .set_certificate_chain_file(&ssl_cert)
+                .expect("Couldn't process certificate file");
+
+            server = server.bind_openssl(&url, ssl_acceptor)?;
+        }
+        (None, None) => {
+            log::info!("No SSL key/cert provided, starting without SSL");
+            server = server.bind(&url)?;
+        }
+        _ => {
+            log::warn!("Missing SSL_KEY or SSL_CERT, both are required for SSL");
+            server = server.bind(&url)?;
+        }
+    }
+
+    server.run().await
 }
 
 fn main() -> std::io::Result<()> {

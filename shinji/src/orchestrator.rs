@@ -52,9 +52,9 @@ fn retry_to_str(duration: &std::time::Duration) -> String {
 impl Error {
     pub fn to_message(&self) -> &'static str {
         match self {
-            Self::RateLimitExceeded(_) => "Rate limit exceeded",
+            Self::RateLimitExceeded(..) => "Rate limit exceeded",
             Self::ShardNotActive(..) => "Shard is not active",
-            Self::ShardNotFound(_) => "Shard not found",
+            Self::ShardNotFound(..) => "Shard not found",
             Self::Unhandled(..) => "Internal server error",
         }
     }
@@ -74,8 +74,8 @@ impl Error {
 
                 response.body(message)
             }
-            Self::ShardNotFound(_) => HttpResponse::NotFound().body(message),
-            Self::Unhandled(_) => HttpResponse::InternalServerError().body(message),
+            Self::ShardNotFound(..) => HttpResponse::NotFound().body(message),
+            Self::Unhandled(..) => HttpResponse::InternalServerError().body(message),
         };
 
         actix_web::error::InternalError::from_response(message, result)

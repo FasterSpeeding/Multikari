@@ -62,5 +62,4 @@ coverage.xml
 *target/
 
 *.ssl/
-
-.curve/
+*.curve/

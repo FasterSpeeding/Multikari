@@ -43,7 +43,7 @@ pub fn get_env_variable(key: &str) -> Option<String> {
 
 pub fn setup_logging() {
     let level = match get_env_variable("LOG_LEVEL").map(|v| log::LevelFilter::from_str(&v)) {
-        Some(Err(_)) => {
+        Some(Err(..)) => {
             panic!("Invalid log level provided, expected TRACE, DEBUG, INFO, WARN or ERROR")
         }
         Some(Ok(level)) => level,
