@@ -40,6 +40,17 @@ where
     Deserialize::deserialize(deserializer).map(Some)
 }
 
+// Metadata
+
+#[derive(Debug, Serialize)]
+pub struct Shard {
+    pub  is_active: bool,
+    pub  heartbeat_latency:   Option<f64>,
+    pub shard_id: u64,
+}
+
+// Gateway Requests
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct GuildRequestMembers {
     #[serde(

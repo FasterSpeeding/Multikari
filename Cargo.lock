@@ -1451,6 +1451,8 @@ version = "0.1.0"
 dependencies = [
  "actix-web",
  "async-trait",
+ "base64",
+ "futures",
  "log",
  "openssl",
  "serde_json",

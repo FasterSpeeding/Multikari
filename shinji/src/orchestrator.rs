@@ -33,6 +33,8 @@ use std::fmt;
 use actix_web::http::header;
 use actix_web::HttpResponse;
 use async_trait::async_trait;
+use shared::dto;
+use tokio::sync::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 #[derive(Debug)]
 pub enum Error {
@@ -42,7 +44,7 @@ pub enum Error {
     Unhandled(Box<dyn std::error::Error>),
 }
 
-pub type Result = std::result::Result<(), Error>;
+pub type Result<T> = std::result::Result<T, Error>;
 
 #[inline]
 fn retry_to_str(duration: &std::time::Duration) -> String {
@@ -97,28 +99,112 @@ impl std::error::Error for Error {
     }
 }
 
+#[derive(Debug)]
+pub struct Shard {
+    is_active: bool,
+    last_seen: Option<std::time::Instant>,
+    latency:   Option<f64>,
+    shard_id:  u64,
+}
+
+impl Shard {
+    fn new(shard_id: u64) -> Self {
+        Self {
+            is_active: false,
+            last_seen: None,
+            latency: None,
+            shard_id,
+        }
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.is_active
+    }
+
+    pub fn last_seen_at(&self) -> &Option<std::time::Instant> {
+        &self.last_seen
+    }
+
+    pub fn heartbeat_latency(&self) -> &Option<f64> {
+        &self.latency
+    }
+
+    pub fn set_heartbeat_latency(&mut self, latency: f64) -> &Self {
+        self.latency = Some(latency);
+        self
+    }
+
+    pub fn set_last_seen(&mut self, last_seen: std::time::Instant) -> &Self {
+        self.last_seen = Some(last_seen);
+        self
+    }
+
+    pub fn set_is_active(&mut self, is_active: bool) -> &Self {
+        self.is_active = is_active;
+        self
+    }
+
+    pub fn to_dto(&self) -> dto::Shard {
+        dto::Shard {
+            is_active:         self.is_active,
+            heartbeat_latency: self.latency,
+            shard_id:          self.shard_id,
+        }
+    }
+}
+
 #[async_trait]
 pub trait Orchestrator {
+    async fn get_shard(&self, shard_id: u64) -> Option<RwLockReadGuard<'_, Shard>>;
+    async fn get_shard_mut(&self, shard_id: u64) -> Option<RwLockWriteGuard<'_, Shard>>;
+    async fn get_shards(&self) -> Vec<RwLockReadGuard<'_, Shard>>;
     fn get_shard_count(&self) -> u64;
     fn get_guild_shard(&self, guild_id: u64) -> u64;
-    async fn send_to_all(&self, data: &[u8]) -> Result;
-    async fn send_to_shard(&self, shard_id: u64, data: &[u8]) -> Result;
+    async fn send_to_all(&self, data: &[u8]) -> Result<()>;
+    async fn send_to_shard(&self, shard_id: u64, data: &[u8]) -> Result<()>;
 }
 
 
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 pub struct ZmqOrchestrator {
     shard_count: u64,
+    shards:      std::collections::BTreeMap<u64, RwLock<Shard>>,
 }
 
 impl ZmqOrchestrator {
-    pub fn new() -> Self {
-        Self { shard_count: 0 }
+    pub fn new(shard_count: u64) -> Self {
+        let shards: std::collections::BTreeMap<u64, RwLock<Shard>> = (0..shard_count)
+            .into_iter()
+            .map(|shard_id| (shard_id, RwLock::from(Shard::new(shard_id))))
+            .collect();
+
+        Self { shard_count, shards }
     }
 }
 
 #[async_trait]
 impl Orchestrator for ZmqOrchestrator {
+    async fn get_shard(&self, shard_id: u64) -> Option<RwLockReadGuard<'_, Shard>> {
+        if let Some(shard) = self.shards.get(&shard_id) {
+            Some(shard.read().await)
+        } else {
+            None
+        }
+    }
+
+    async fn get_shard_mut(&self, shard_id: u64) -> Option<RwLockWriteGuard<'_, Shard>> {
+        if let Some(shard) = self.shards.get(&shard_id) {
+            Some(shard.write().await)
+        } else {
+            None
+        }
+    }
+
+    async fn get_shards(&self) -> Vec<RwLockReadGuard<'_, Shard>> {
+        let results: Vec<_> = self.shards.values().map(RwLock::read).collect();
+        futures::future::join_all(results).await
+    }
+
     fn get_shard_count(&self) -> u64 {
         self.shard_count
     }
@@ -127,11 +213,11 @@ impl Orchestrator for ZmqOrchestrator {
         (guild_id >> 22) % self.shard_count
     }
 
-    async fn send_to_all(&self, data: &[u8]) -> Result {
+    async fn send_to_all(&self, data: &[u8]) -> Result<()> {
         Err(Error::RateLimitExceeded(std::time::Duration::from_secs(999999)))
     }
 
-    async fn send_to_shard(&self, shard_id: u64, data: &[u8]) -> Result {
+    async fn send_to_shard(&self, shard_id: u64, data: &[u8]) -> Result<()> {
         Err(Error::ShardNotFound(shard_id))
     }
 }

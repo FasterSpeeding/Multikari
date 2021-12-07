@@ -38,27 +38,80 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use shared::dto;
 mod orchestrator;
 
+#[inline]
+fn invalid_token() -> InternalError<&'static str> {
+    InternalError::new("Missing or invalid authorization header", StatusCode::UNAUTHORIZED)
+}
+
+
+// TODO: this is never gonna happen cause i'm too dumb to understand the docs
+// but could this be made a middleware which just apples to every endpoint?
+struct Token {
+    token: String,
+}
+
+impl Token {
+    pub fn new(token: &str) -> Self {
+        let token = base64::encode(format!("__token__:{}", token));
+        Self {
+            token: format!("Basic {}", token.trim_end_matches("=")),
+        }
+    }
+
+    fn check(&self, req: &HttpRequest) -> Result<(), InternalError<&'static str>> {
+        let header_value = req
+            .headers()
+            .get("Authorization")
+            .map(|v| v.to_str().ok())
+            .flatten()
+            .ok_or_else(invalid_token)?;
+
+        if header_value.trim_end_matches("=") == self.token {
+            Ok(())
+        } else {
+            Err(InternalError::new("Unknown token", StatusCode::UNAUTHORIZED))
+        }
+    }
+}
+
+
 #[get("/shards/{shard_id}")]
 async fn get_shard_by_id(
+    req: HttpRequest,
     shard_id: web::Path<u64>,
-    orchestrator: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+    orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
-    Ok(HttpResponse::NoContent().finish())
+    token.check(&req)?;
+    let shard = orch
+        .get_shard(shard_id.into_inner())
+        .await
+        .ok_or_else(|| InternalError::new("Shard not found", StatusCode::NOT_FOUND))?
+        .to_dto();
+
+    Ok(HttpResponse::Ok().json(shard))
 }
 
 #[get("/shards")]
 async fn get_shards(
-    orchestrator: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+    req: HttpRequest,
+    orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
-    Ok(HttpResponse::NoContent().finish())
+    token.check(&req)?;
+    let shards: Vec<_> = orch.get_shards().await.iter().map(|v| v.to_dto()).collect();
+    Ok(HttpResponse::Ok().json(shards))
 }
 
 #[patch("/shards/{shard_id}/presence")]
 async fn patch_shard_presence(
+    req: HttpRequest,
     shard_id: web::Path<u64>,
     data: web::Json<dto::PresenceUpdate>,
     orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
+    token.check(&req)?;
     // TODO: are these case-sensitive?
     if !["online", "dnd", "idle", "invisibile", "offline"].contains(&data.status.as_ref()) {
         return Err(InternalError::new("Invalid presence status", StatusCode::BAD_REQUEST));
@@ -75,10 +128,13 @@ async fn patch_shard_presence(
 
 #[post("/guilds/{guild_id}/request_members")]
 async fn request_members(
+    req: HttpRequest,
     guild_id: web::Path<u64>,
     data: web::Json<dto::GuildRequestMembers>,
     orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
+    token.check(&req)?;
     let guild_id = guild_id.into_inner();
     let shard_id = orch.get_guild_shard(guild_id);
 
@@ -90,15 +146,18 @@ async fn request_members(
         .await
         .map_err(|e| e.to_response())?;
 
-    Ok(HttpResponse::NoContent().finish())
+    Ok(HttpResponse::Accepted().finish())
 }
 
 #[patch("/guilds/{guild_id}/voice_state")]
 async fn patch_guild_voice_state(
+    req: HttpRequest,
     guild_id: web::Path<u64>,
     data: web::Json<dto::VoiceStateUpdate>,
     orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
+    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
+    token.check(&req)?;
     let guild_id = guild_id.into_inner();
     let shard_id = orch.get_guild_shard(guild_id);
 
@@ -114,18 +173,18 @@ async fn patch_guild_voice_state(
 }
 
 async fn actix_main() -> std::io::Result<()> {
-    let ssl_config = (
-        shared::get_env_variable("SSL_KEY"),
-        shared::get_env_variable("SSL_CERT"),
-    );
     let url = shared::get_env_variable("URL").expect("Missing URL env variable");
+    let shard_count: u64 = shared::get_env_variable("SHARD_COUNT")
+        .expect("Missing SHARD_COUNT env variable")
+        .parse()
+        .expect("Invalid SHARD_COUNT env variable");
+    let token = shared::get_env_variable("TOKEN").expect("Missing TOKEN env variable");
 
-    let orch = orchestrator::ZmqOrchestrator::new();
+    let orch = Arc::from(orchestrator::ZmqOrchestrator::new(shard_count));
     let mut server = HttpServer::new(move || {
         App::new()
-            .app_data(web::Data::new(
-                Arc::from(orch.clone()) as Arc<dyn orchestrator::Orchestrator>
-            ))
+            .app_data(web::Data::new(Arc::clone(&orch) as Arc<dyn orchestrator::Orchestrator>))
+            .app_data(web::Data::new(Token::new(&token)))
             .service(get_shard_by_id)
             .service(get_shards)
             .service(request_members)
@@ -133,6 +192,10 @@ async fn actix_main() -> std::io::Result<()> {
             .service(patch_shard_presence)
     });
 
+    let ssl_config = (
+        shared::get_env_variable("SSL_KEY"),
+        shared::get_env_variable("SSL_CERT"),
+    );
     match ssl_config {
         (Some(ssl_key), Some(ssl_cert)) => {
             log::info!("Starting with SSL");
@@ -157,7 +220,10 @@ async fn actix_main() -> std::io::Result<()> {
         }
     }
 
-    server.run().await
+    server
+        .workers(1) // This only needs 1 thread, any more would be excessive lol.
+        .run()
+        .await
 }
 
 fn main() -> std::io::Result<()> {
@@ -169,7 +235,7 @@ fn main() -> std::io::Result<()> {
     }
 
     actix_web::rt::System::with_tokio_rt(|| {
-        tokio::runtime::Builder::new_multi_thread()
+        tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .unwrap()
