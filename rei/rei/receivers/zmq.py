@@ -90,6 +90,7 @@ class _CountingSeamphore:
 
 
 def _process_pipeline_message(message: tuple[zmq.Frame, ...], /) -> tuple[int, str, bytes]:
+    # [b"{shard_id}", b"{event_name}", b"{payload}"]
     assert len(message) == 3
     shard_id = message[0].bytes
     event_name = message[1].bytes
@@ -101,6 +102,7 @@ def _process_pipeline_message(message: tuple[zmq.Frame, ...], /) -> tuple[int, s
 
 
 def _process_publish_message(message: tuple[zmq.Frame, ...], /) -> tuple[int, str, bytes]:
+    # [b"{event_name}:{shard_id}", b"{payload}"]
     assert len(message) == 2
     topic = message[0].bytes
     payload = message[1].bytes
@@ -209,7 +211,7 @@ class ZmqReceiver(abc.AbstractReceiver):
                     message: tuple[zmq.Frame, ...] = await socket.recv_multipart(copy=False)
 
                 except zmq.ZMQError as exc:
-                    # Indicates the socket or its context was termianted.
+                    # Indicates the socket or its context was terminated.
                     if exc.errno in (zmq.ETERM, zmq.ENOTSOCK):
                         _LOGGER.error("Socket closed with {}: {}", exc.errno, exc.strerror)
                         break

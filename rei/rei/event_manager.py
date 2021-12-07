@@ -50,6 +50,7 @@ if typing.TYPE_CHECKING:
     from . import receivers
 
     _EventStreamT = typing.TypeVar("_EventStreamT", bound="EventStream[typing.Any]")
+    _ConverterSig = collections.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]
 
 _DATA_KEY = "d"
 
@@ -236,9 +237,7 @@ class _EventConverter:
 
     def __init__(self, event_factory: hikari.api.EventFactory) -> None:
         self._event_factory = event_factory
-        self._name_to_converter: dict[
-            str, collections.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]
-        ] = {
+        self._name_to_converter: dict[str, typing.Optional[_ConverterSig]] = {
             "READY": event_factory.deserialize_ready_event,
             "RESUMED": lambda s, _: event_factory.deserialize_resumed_event(s),
             "CHANNEL_CREATE": event_factory.deserialize_guild_channel_create_event,
@@ -265,7 +264,7 @@ class _EventConverter:
             "GUILD_EMOJIS_UPDATE": lambda s, p: event_factory.deserialize_guild_emojis_update_event(
                 s, p, old_emojis=None
             ),
-            "GUILD_INTEGRATIONS_UPDATE": self._on_guild_integrations_update,
+            "GUILD_INTEGRATIONS_UPDATE": None,
             "INTEGRATION_CREATE": event_factory.deserialize_integration_create_event,
             "INTEGRATION_DELETE": event_factory.deserialize_integration_delete_event,
             "INTEGRATION_UPDATE": event_factory.deserialize_integration_update_event,
@@ -314,14 +313,7 @@ class _EventConverter:
             "INTERACTION_CREATE": event_factory.deserialize_interaction_create_event,
         }
 
-    def _on_guild_integrations_update(
-        self, _: hikari.api.GatewayShard, __: dict[str, typing.Any], /
-    ) -> typing.NoReturn:
-        raise NotImplementedError
-
-    def get_converter(
-        self, event_name: str
-    ) -> collections.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]:
+    def get_converter(self, event_name: str) -> typing.Optional[_ConverterSig]:
         return self._name_to_converter[event_name]
 
 
@@ -351,11 +343,15 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
 
     def consume_pipeline_event(self, event_name: str, shard: hikari.api.GatewayShard, data: bytes, /) -> None:
         if listeners := self.__listeners.get(event_name):
-            event = self.__converter.get_converter(event_name)(shard, self._unjsonify(data))
-            asyncio.gather(*(self._invoke_callback(callback, event) for callback in listeners))
+            if converter := self.__converter.get_converter(event_name):
+                event = converter(shard, self._unjsonify(data))
+                asyncio.gather(*(self._invoke_callback(callback, event) for callback in listeners))
 
     def consume_subbed_event(self, event_name: str, shard: hikari.api.GatewayShard, data: bytes, /) -> None:
         converter = self.__converter.get_converter(event_name)
+        if converter is None:
+            return
+
         event: typing.Optional[hikari.Event] = None
         if streams := self.__streams.get(event_name):
             event = converter(shard, self._unjsonify(data))
