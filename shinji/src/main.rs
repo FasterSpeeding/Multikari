@@ -112,7 +112,7 @@ async fn patch_shard_presence(
 ) -> Result<HttpResponse, InternalError<&'static str>> {
     token.check(&req)?;
     // TODO: are these case-sensitive?
-    if !["online", "dnd", "idle", "invisibile", "offline"].contains(&data.status.as_ref()) {
+    if !["online", "dnd", "idle", "invisible", "offline"].contains(&data.status.as_ref()) {
         return Err(InternalError::new("Invalid presence status", StatusCode::BAD_REQUEST));
     };
 
