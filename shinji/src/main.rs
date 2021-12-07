@@ -52,35 +52,27 @@ struct Token {
 
 impl Token {
     pub fn new(token: &str) -> Self {
+        let token = base64::encode(format!("__token__:{}", token));
         Self {
-            token: token.to_owned(),
+            token: format!("Basic {}", token.trim_end_matches("=")),
         }
     }
 
     fn check(&self, req: &HttpRequest) -> Result<(), InternalError<&'static str>> {
-        let (token_type, auth) = req
+        let header_value = req
             .headers()
             .get("Authorization")
             .map(|v| v.to_str().ok())
             .flatten()
-            .map(|v| v.split_once(" "))
-            .flatten()
             .ok_or_else(invalid_token)?;
 
-        if !token_type.eq_ignore_ascii_case("Basic") {
-            return Err(invalid_token());
-        }
-
-        let raw_auth_parts = base64::decode(auth).map_err(|_| invalid_token())?;
-        let auth_parts = String::from_utf8_lossy(&raw_auth_parts);
-        if auth_parts.split_once(":").ok_or_else(invalid_token)?.1 != self.token {
-            Err(InternalError::new("Unknown token", StatusCode::UNAUTHORIZED))
-        } else {
+        if header_value.trim_end_matches("=") == self.token {
             Ok(())
+        } else {
+            Err(InternalError::new("Unknown token", StatusCode::UNAUTHORIZED))
         }
     }
 }
-
 
 #[get("/shards/{shard_id}")]
 async fn get_shard_by_id(
