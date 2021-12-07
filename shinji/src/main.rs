@@ -52,28 +52,32 @@ struct Token {
 
 impl Token {
     pub fn new(token: &str) -> Self {
-        let token = base64::encode(format!("__token__:{}", token));
         Self {
-            token: format!("Basic {}", token.trim_end_matches("=")),
+            token: base64::encode(format!("__token__:{}", token))
+                .trim_end_matches("=")
+                .to_string(),
         }
     }
 
     fn check(&self, req: &HttpRequest) -> Result<(), InternalError<&'static str>> {
-        let header_value = req
+        let (token_type, auth) = req
             .headers()
             .get("Authorization")
             .map(|v| v.to_str().ok())
             .flatten()
+            .map(|v| v.split_once(" "))
+            .flatten()
             .ok_or_else(invalid_token)?;
 
-        if header_value.trim_end_matches("=") == self.token {
+        if !token_type.eq_ignore_ascii_case("Basic") {
+            Err(invalid_token())
+        } else if auth.trim_end_matches("=") == self.token {
             Ok(())
         } else {
             Err(InternalError::new("Unknown token", StatusCode::UNAUTHORIZED))
         }
     }
 }
-
 #[get("/shards/{shard_id}")]
 async fn get_shard_by_id(
     req: HttpRequest,
