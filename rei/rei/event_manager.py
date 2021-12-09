@@ -64,7 +64,6 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
         "_is_active",
         "_limit",
         "_receive_event",
-        "__receiver",
         "_timeout",
     )
 
@@ -77,12 +76,12 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
         limit: typing.Optional[int] = None,
     ) -> None:
         self._buffer: list[event_manager_api.EventT] = []
-        self._receive_event: typing.Optional[asyncio.Event] = None
         self._event_manager = event_manager
         self._event_type = event_type
         self._filters: hikari.iterators.All[event_manager_api.EventT] = hikari.iterators.All(())
         self._is_active = False
         self._limit = limit
+        self._receive_event: typing.Optional[asyncio.Event] = None
         self._timeout = timeout
 
     @property
@@ -233,10 +232,9 @@ for _event_type, _names in _EVENT_TO_NAMES.copy().items():
 
 
 class _EventConverter:
-    __slots__ = ("_event_factory", "_name_to_converter")
+    __slots__ = ("_name_to_converter",)
 
     def __init__(self, event_factory: hikari.api.EventFactory) -> None:
-        self._event_factory = event_factory
         self._name_to_converter: dict[str, typing.Optional[_ConverterSig]] = {
             "READY": event_factory.deserialize_ready_event,
             "RESUMED": lambda s, _: event_factory.deserialize_resumed_event(s),
@@ -246,17 +244,17 @@ class _EventConverter:
             "CHANNEL_DELETE": event_factory.deserialize_guild_channel_delete_event,
             "CHANNEL_PINS_UPDATE": event_factory.deserialize_channel_pins_update_event,
             "GUILD_CREATE": lambda s, p: (
-                self._event_factory.deserialize_guild_available_event(s, p)
+                event_factory.deserialize_guild_available_event(s, p)
                 if "unavailable" in p
-                else self._event_factory.deserialize_guild_join_event(s, p)
+                else event_factory.deserialize_guild_join_event(s, p)
             ),
             #  TODO: make old_guild optional
             "GUILD_UPDATE": lambda s, p: event_factory.deserialize_guild_update_event(s, p, old_guild=None),
             "GUILD_DELETE": lambda s, p: (
-                self._event_factory.deserialize_guild_unavailable_event(s, p)
+                event_factory.deserialize_guild_unavailable_event(s, p)
                 if p.get("unavailable", False)
                 # TODO: old_guild needs to be optional
-                else self._event_factory.deserialize_guild_leave_event(s, p, old_guild=None)
+                else event_factory.deserialize_guild_leave_event(s, p, old_guild=None)
             ),
             "GUILD_BAN_ADD": event_factory.deserialize_guild_ban_add_event,
             "GUILD_BAN_REMOVE": event_factory.deserialize_guild_ban_remove_event,

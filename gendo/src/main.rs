@@ -34,8 +34,8 @@ use std::str::FromStr;
 use futures_util::StreamExt;
 use twilight_gateway::{cluster, Event, EventTypeFlags, Intents};
 use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
-mod sender;
-use sender::Sender;
+mod senders;
+use senders::Sender;
 
 #[tokio::main]
 async fn main() {
@@ -54,6 +54,7 @@ async fn main() {
     };
 
     let sender = sender::ZmqSender::build().await;
+    let sender = senders::zmq::ZmqSender::build().await;
 
     let (cluster, events) = cluster::Cluster::builder(token, intents)
         .event_types(EventTypeFlags::SHARD_PAYLOAD)
