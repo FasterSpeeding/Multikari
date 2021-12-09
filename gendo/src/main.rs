@@ -28,10 +28,12 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
+#![feature(async_closure)]
 use std::str::FromStr;
 
 use futures_util::StreamExt;
 use twilight_gateway::{cluster, Event, EventTypeFlags, Intents};
+use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
 mod sender;
 use sender::Sender;
 
@@ -53,7 +55,7 @@ async fn main() {
 
     let sender = sender::ZmqSender::build().await;
 
-    let (cluster, mut events) = cluster::Cluster::builder(token, intents)
+    let (cluster, events) = cluster::Cluster::builder(token, intents)
         .event_types(EventTypeFlags::SHARD_PAYLOAD)
         .build()
         .await
@@ -65,22 +67,26 @@ async fn main() {
         cluster.clone().up().await;
     });
 
-    while let Some(event) = events.next().await {
+    let mut filtered = events.filter_map(async move |event| {
         let (shard_id, event) = match event {
             (shard_id, Event::ShardPayload(payload)) => (shard_id, payload),
-            _ => continue,
+            _ => return None,
         };
         let payload = std::str::from_utf8(&event.bytes);
 
         if payload.is_err() {
-            continue;
+            log::error!(
+                "Ignoring payload which failed to convert to utf8: {}",
+                payload.unwrap_err()
+            );
+            return None;
         }
         let payload = payload.unwrap();
 
-        if let Some(event) = twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(payload) {
-            if let Some(event_type) = event.event_type_ref() {
-                sender.consume_event(shard_id, event_type, payload).await;
-            }
-        }
-    }
+        GatewayEventDeserializer::from_json(payload)
+            .map(|v| v.event_type_ref().map(|v| v.to_owned()))
+            .flatten()
+            .map(move |v| (shard_id, v, event.bytes))
+    });
+    sender.consume_all(Box::new(Box::pin(filtered))).await;
 }

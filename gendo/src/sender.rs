@@ -28,64 +28,163 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
+use std::marker::Unpin;
+use std::pin::Pin;
+use std::task::{Context, Poll};
+
 use async_trait::async_trait;
-use futures::SinkExt;
+use futures::{Sink, SinkExt};
+use tmq::{Multipart, TmqError};
+
+
+type Event = (u64, String, Vec<u8>);
+type EventStream = dyn futures_util::Stream<Item = Event> + Send + Unpin;
 
 #[async_trait]
 pub trait Sender {
-    async fn consume_event(&self, shard_id: u64, event_name: &str, event: &str);
+    async fn consume_event(&self, shard_id: u64, event_name: &str, event: &[u8]);
+    async fn consume_all(&self, stream: Box<EventStream>);
 }
 
-pub struct ZmqSender {
-    ctx:            tmq::Context,
-    push_socket:    std::sync::Arc<tokio::sync::Mutex<tmq::push::Push>>,
-    publish_socket: std::sync::Arc<tokio::sync::Mutex<tmq::publish::Publish>>,
+struct JoinedSockets {
+    publish_socket: tmq::publish::Publish,
+    push_socket:    tmq::push::Push,
 }
 
-impl ZmqSender {
-    pub async fn build() -> Self {
-        let pipeline_address =
-            shared::get_env_variable("ZMQ_PIPELINE_ADDRESS").expect("Missing ZMQ_PIPELINE_ADDRESS env variable");
-        let publish_address =
-            shared::get_env_variable("ZMQ_PUBLISH_ADDRESS").expect("Missing ZMQ_PUBLISH_ADDRESS env variable");
-        // let curve_server = shared::get_env_variable("ZMQ_CURVE_SERVER")
-        //     .expect("Missing ZMQ_CURVE_SERVER env variable");
-
-        let ctx = tmq::Context::new();
-        let push_socket = tmq::push::push(&ctx).bind(&pipeline_address).expect(format!(
-            "Failed to connect to ZMQ pipeline queue with provided address: {}",
-            &pipeline_address
-        ));
-        // .set_curve_server(&curve_server)
-        // set_backlog
-
-        let publish_socket = tmq::publish::publish(&ctx).bind(&publish_address).expect(format!(
-            "Failed to connect to ZMQ publish queue with provided path: {}",
-            &publish_address
-        ));
-
+impl JoinedSockets {
+    fn new(publish_socket: tmq::publish::Publish, push_socket: tmq::push::Push) -> Self {
         Self {
-            ctx,
-            push_socket: std::sync::Arc::from(tokio::sync::Mutex::from(push_socket)),
-            publish_socket: std::sync::Arc::from(tokio::sync::Mutex::from(publish_socket)),
+            push_socket,
+            publish_socket,
         }
     }
 }
 
+impl futures_util::sink::Sink<Event> for JoinedSockets {
+    type Error = TmqError;
+
+    fn poll_ready(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let result = Pin::new(&mut self.publish_socket as &mut (dyn Sink<Multipart, Error = TmqError> + Unpin))
+            .poll_ready(ctx)?;
+
+        if result == Poll::Pending {
+            return Poll::Pending;
+        }
+
+        Pin::new(&mut self.push_socket as &mut (dyn Sink<Multipart, Error = TmqError> + Unpin)).poll_ready(ctx)
+    }
+
+    fn start_send(mut self: Pin<&mut Self>, item: Event) -> Result<(), Self::Error> {
+        let (shard_id, event_name, payload) = item;
+        let shard_id = shard_id.to_string();
+        let topic = format!("{}:{}", event_name, shard_id);
+        Pin::new(&mut self.publish_socket).start_send(vec![topic.as_bytes(), &payload])?;
+        Pin::new(&mut self.push_socket).start_send(vec![shard_id.as_bytes(), event_name.as_bytes(), &payload])
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let result = Pin::new(&mut self.publish_socket as &mut (dyn Sink<Multipart, Error = TmqError> + Unpin))
+            .poll_flush(ctx)?;
+
+        if result == Poll::Pending {
+            return Poll::Pending;
+        }
+
+        Pin::new(&mut self.push_socket as &mut (dyn Sink<Multipart, Error = TmqError> + Unpin)).poll_flush(ctx)
+    }
+
+    fn poll_close(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        let result = Pin::new(&mut self.publish_socket as &mut (dyn Sink<Multipart, Error = TmqError> + Unpin))
+            .poll_close(ctx)?;
+
+        if result == Poll::Pending {
+            return Poll::Pending;
+        }
+
+        Pin::new(&mut self.push_socket as &mut (dyn Sink<Multipart, Error = TmqError> + Unpin)).poll_close(ctx)
+    }
+}
+
+
+pub struct ZmqSender {
+    ctx:     tmq::Context,
+    sockets: std::sync::Arc<tokio::sync::Mutex<JoinedSockets>>,
+}
+
+impl ZmqSender {
+    pub async fn build() -> Self {
+        let publish_address =
+            shared::get_env_variable("ZMQ_PUBLISH_ADDRESS").expect("Missing ZMQ_PUBLISH_ADDRESS env variable");
+        let pipeline_address =
+            shared::get_env_variable("ZMQ_PIPELINE_ADDRESS").expect("Missing ZMQ_PIPELINE_ADDRESS env variable");
+        // let curve_server = shared::get_env_variable("ZMQ_CURVE_SERVER")
+        //     .expect("Missing ZMQ_CURVE_SERVER env variable");
+
+        let ctx = tmq::Context::new();
+        let publish_socket = tmq::publish::publish(&ctx)
+            .bind(&publish_address)
+            .unwrap_or_else(|exc| {
+                panic!(
+                    "Failed to connect to ZMQ publish queue with provided path: {} due to {}",
+                    &publish_address, exc
+                )
+            });
+        let push_socket = tmq::push::push(&ctx).bind(&pipeline_address).unwrap_or_else(|exc| {
+            panic!(
+                "Failed to connect to ZMQ pipeline queue with provided address: {} due to {}",
+                &pipeline_address, exc
+            )
+        });
+        // .set_curve_server(&curve_server)
+        // set_backlog
+
+        Self {
+            ctx,
+            sockets: std::sync::Arc::new(tokio::sync::Mutex::new(JoinedSockets::new(publish_socket, push_socket))),
+        }
+    }
+}
+
+struct TryAdapter {
+    inner: Box<EventStream>,
+}
+
+impl TryAdapter {
+    fn new(inner: Box<EventStream>) -> Self {
+        Self { inner }
+    }
+}
+
+impl futures_util::stream::Stream for TryAdapter {
+    type Item = Result<Event, TmqError>;
+
+    fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        Pin::new(&mut self.inner).poll_next(ctx).map(|v| v.map(Ok))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.inner.size_hint()
+    }
+}
+
+
 #[async_trait]
 impl Sender for ZmqSender {
-    async fn consume_event(&self, shard_id: u64, event_name: &str, event: &str) {
-        self.push_socket
+    async fn consume_event(&self, shard_id: u64, event_name: &str, event: &[u8]) {
+        self.sockets
             .lock()
             .await
-            .send(vec![&format!("{}", shard_id) as &str, event_name, event])
+            .send((shard_id, event_name.to_string(), event.to_vec()))
             .await
-            .unwrap(); // TODO:  error handling
+            .unwrap(); // TODO: error handling
+    }
 
-        self.publish_socket
+    async fn consume_all(&self, stream: Box<EventStream>) {
+        // TODO: error handling
+        self.sockets
             .lock()
             .await
-            .send(vec![&format!("{}:{}", event_name, shard_id) as &str, event])
+            .send_all(&mut TryAdapter::new(stream))
             .await
             .unwrap();
     }

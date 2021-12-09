@@ -40,13 +40,30 @@ where
     Deserialize::deserialize(deserializer).map(Some)
 }
 
+//  Discord Package
+
+#[derive(Debug, Deserialize)]
+pub struct SessionStartLimit {
+    pub total:           u64,
+    pub remaining:       u64,
+    pub reset_after:     u64,
+    pub max_concurrency: u64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GatewayBot {
+    pub url:                 String,
+    pub shards:              u64,
+    pub session_start_limit: SessionStartLimit,
+}
+
 // Metadata
 
 #[derive(Debug, Serialize)]
 pub struct Shard {
-    pub  is_active: bool,
-    pub  heartbeat_latency:   Option<f64>,
-    pub shard_id: u64,
+    pub is_active:         bool,
+    pub heartbeat_latency: Option<f64>,
+    pub shard_id:          u64,
 }
 
 // Gateway Requests

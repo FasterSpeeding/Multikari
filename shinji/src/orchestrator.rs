@@ -129,17 +129,17 @@ impl Shard {
         &self.latency
     }
 
-    pub fn set_heartbeat_latency(&mut self, latency: f64) -> &Self {
+    pub fn set_heartbeat_latency(&mut self, latency: f64) -> &mut Self {
         self.latency = Some(latency);
         self
     }
 
-    pub fn set_last_seen(&mut self, last_seen: std::time::Instant) -> &Self {
+    pub fn set_last_seen(&mut self, last_seen: std::time::Instant) -> &mut Self {
         self.last_seen = Some(last_seen);
         self
     }
 
-    pub fn set_is_active(&mut self, is_active: bool) -> &Self {
+    pub fn set_is_active(&mut self, is_active: bool) -> &mut Self {
         self.is_active = is_active;
         self
     }

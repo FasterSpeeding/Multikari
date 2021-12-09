@@ -28,6 +28,7 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
+use std::fmt;
 use std::result::Result;
 use std::sync::Arc;
 
@@ -35,14 +36,88 @@ use actix_web::error::InternalError;
 use actix_web::http::StatusCode;
 use actix_web::{get, patch, post, web, App, HttpRequest, HttpResponse, HttpServer};
 use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use rand::Rng;
 use shared::dto;
 mod orchestrator;
 
-#[inline]
-fn invalid_token() -> InternalError<&'static str> {
-    InternalError::new("Missing or invalid authorization header", StatusCode::UNAUTHORIZED)
+
+#[derive(Debug)]
+struct FailedRequest {
+    message:     String,
+    status_code: u16,
 }
 
+impl FailedRequest {
+    fn new(message: &str, status_code: u16) -> Self {
+        Self {
+            message: message.to_owned(),
+            status_code,
+        }
+    }
+}
+
+impl fmt::Display for FailedRequest {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "Request failed with generic error: {} - {}",
+            self.status_code, self.message
+        )
+    }
+}
+
+impl std::error::Error for FailedRequest {
+}
+
+
+async fn get_gateway_bot(token: &str) -> Result<dto::GatewayBot, Box<dyn std::error::Error>> {
+    let client = reqwest::Client::new();
+    let mut attempts: u16 = 0;
+
+    loop {
+        let response = client
+            .get("https://discord.com/api/gateway/bot")
+            .header(reqwest::header::AUTHORIZATION, format!("Bot {}", token))
+            .send()
+            .await?;
+
+        let status = response.status();
+        match status.as_u16() {
+            200..=299 => return response.json().await.map_err(Box::from),
+            429 | 500 | 502 | 503 | 504 => {
+                attempts += 1;
+                if attempts > 5 {
+                    return Err(Box::from(FailedRequest::new(
+                        "Too many failed attempts",
+                        status.as_u16(),
+                    )));
+                }
+                let retry_after = response
+                    .headers()
+                    .get(reqwest::header::RETRY_AFTER)
+                    .and_then(|v| v.to_str().ok())
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .unwrap_or_else(|| 2f64.powf(attempts.into()) + rand::thread_rng().gen_range(0.0..1.0));
+
+                log::warn!("{} - Retrying in {:.3} seconds", status, retry_after);
+                tokio::time::sleep(std::time::Duration::from_secs_f64(retry_after)).await;
+                continue;
+            }
+            _ => {
+                response.error_for_status()?;
+                return Err(Box::from(FailedRequest::new(
+                    status.canonical_reason().unwrap_or("Unknown error"),
+                    status.as_u16(),
+                )));
+            }
+        }
+    }
+}
+
+#[inline]
+fn bad_token() -> InternalError<&'static str> {
+    InternalError::new("Missing or invalid authorization header", StatusCode::UNAUTHORIZED)
+}
 
 // TODO: this is never gonna happen cause i'm too dumb to understand the docs
 // but could this be made a middleware which just apples to every endpoint?
@@ -54,7 +129,7 @@ impl Token {
     pub fn new(token: &str) -> Self {
         Self {
             token: base64::encode(format!("__token__:{}", token))
-                .trim_end_matches("=")
+                .trim_end_matches('=')
                 .to_string(),
         }
     }
@@ -62,22 +137,23 @@ impl Token {
     fn check(&self, req: &HttpRequest) -> Result<(), InternalError<&'static str>> {
         let (token_type, auth) = req
             .headers()
-            .get("Authorization")
+            .get(reqwest::header::AUTHORIZATION)
             .map(|v| v.to_str().ok())
             .flatten()
-            .map(|v| v.split_once(" "))
+            .map(|v| v.split_once(' '))
             .flatten()
-            .ok_or_else(invalid_token)?;
+            .ok_or_else(bad_token)?;
 
         if !token_type.eq_ignore_ascii_case("Basic") {
-            Err(invalid_token())
-        } else if auth.trim_end_matches("=") == self.token {
+            Err(bad_token())
+        } else if auth.trim_end_matches('=') == self.token {
             Ok(())
         } else {
             Err(InternalError::new("Unknown token", StatusCode::UNAUTHORIZED))
         }
     }
 }
+
 #[get("/shards/{shard_id}")]
 async fn get_shard_by_id(
     req: HttpRequest,
@@ -129,7 +205,7 @@ async fn patch_shard_presence(
     Ok(HttpResponse::NoContent().finish())
 }
 
-#[post("/guilds/{guild_id}/request_members")]
+#[post("/guilds/{guild_id}/request-members")]
 async fn request_members(
     req: HttpRequest,
     guild_id: web::Path<u64>,
@@ -152,7 +228,7 @@ async fn request_members(
     Ok(HttpResponse::Accepted().finish())
 }
 
-#[patch("/guilds/{guild_id}/voice_state")]
+#[patch("/guilds/{guild_id}/voice-state")]
 async fn patch_guild_voice_state(
     req: HttpRequest,
     guild_id: web::Path<u64>,
@@ -177,11 +253,11 @@ async fn patch_guild_voice_state(
 
 async fn actix_main() -> std::io::Result<()> {
     let url = shared::get_env_variable("URL").expect("Missing URL env variable");
-    let shard_count: u64 = shared::get_env_variable("SHARD_COUNT")
-        .expect("Missing SHARD_COUNT env variable")
-        .parse()
-        .expect("Invalid SHARD_COUNT env variable");
     let token = shared::get_env_variable("TOKEN").expect("Missing TOKEN env variable");
+    let gateway_bot = get_gateway_bot(&token).await.expect("Failed to fetch Gateway Bot info");
+    let shard_count = shared::get_env_variable("SHARD_COUNT")
+        .map(|v| v.parse().expect("Invalid SHARD_COUNT env variable"))
+        .unwrap_or(gateway_bot.shards);
 
     let orch = Arc::from(orchestrator::ZmqOrchestrator::new(shard_count));
     let mut server = HttpServer::new(move || {
