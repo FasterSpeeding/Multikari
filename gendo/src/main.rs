@@ -67,7 +67,7 @@ async fn main() {
         cluster.clone().up().await;
     });
 
-    let mut filtered = events.filter_map(async move |event| {
+    let filtered = events.filter_map(async move |event| {
         let (shard_id, event) = match event {
             (shard_id, Event::ShardPayload(payload)) => (shard_id, payload),
             _ => return None,

@@ -7,19 +7,18 @@ authors = ["Faster Speeding <lucina@lmbyrne.dev>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-async-trait = "0.1.51"
+async-trait = "0.1"
 # async_zmq = "0.3.2"
-base64 = "0.13.0"
-futures = "0.3"
+base64 = "0.13"
 futures-util = "0.3"
-log = "0.4.14"
+log = "0.4"
 # tokio-zmq = "0.10.1"
-twilight-gateway = "0.7.1"
-twilight-model = "0.7.2"
+twilight-gateway = "0.7"
+twilight-model = "0.7"
 
 [dependencies.reqwest]
 features = ["json"]
-version = "0.11.7"
+version = "0.11"
 
 [dependencies.shared]
 features = ["dto"]
@@ -27,11 +26,11 @@ path = "../shared"
 
 [dependencies.tmq]
 # features = ["zmq-vendored"]
-version = "0.3.0"  #  Obviously needs ZMQ to be installed
+version = "0.3"  #  Obviously needs ZMQ to be installed
 
 [dependencies.tokio]
 features = ["macros", "rt-multi-thread"]
-version = "1.14.0"
+version = "1.14"
 
 # [dependencies.zmq-sys]
 # features = ["vendored"]

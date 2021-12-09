@@ -202,7 +202,7 @@ impl Orchestrator for ZmqOrchestrator {
 
     async fn get_shards(&self) -> Vec<RwLockReadGuard<'_, Shard>> {
         let results: Vec<_> = self.shards.values().map(RwLock::read).collect();
-        futures::future::join_all(results).await
+        futures_util::future::join_all(results).await
     }
 
     fn get_shard_count(&self) -> u64 {

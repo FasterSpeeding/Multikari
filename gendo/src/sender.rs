@@ -30,19 +30,20 @@
 // POSSIBILITY OF SUCH DAMAGE.
 use std::marker::Unpin;
 use std::pin::Pin;
+use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use async_trait::async_trait;
-use futures::{Sink, SinkExt};
+use futures_util::{Sink, SinkExt, Stream};
 use tmq::{Multipart, TmqError};
+use tokio::sync::Mutex;
 
 
 type Event = (u64, String, Vec<u8>);
-type EventStream = dyn futures_util::Stream<Item = Event> + Send + Unpin;
+type EventStream = dyn Stream<Item = Event> + Send + Unpin;
 
 #[async_trait]
 pub trait Sender {
-    async fn consume_event(&self, shard_id: u64, event_name: &str, event: &[u8]);
     async fn consume_all(&self, stream: Box<EventStream>);
 }
 
@@ -60,7 +61,7 @@ impl JoinedSockets {
     }
 }
 
-impl futures_util::sink::Sink<Event> for JoinedSockets {
+impl Sink<Event> for JoinedSockets {
     type Error = TmqError;
 
     fn poll_ready(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
@@ -78,6 +79,7 @@ impl futures_util::sink::Sink<Event> for JoinedSockets {
         let (shard_id, event_name, payload) = item;
         let shard_id = shard_id.to_string();
         let topic = format!("{}:{}", event_name, shard_id);
+        // TODO: should we also try the other before returning either error?
         Pin::new(&mut self.publish_socket).start_send(vec![topic.as_bytes(), &payload])?;
         Pin::new(&mut self.push_socket).start_send(vec![shard_id.as_bytes(), event_name.as_bytes(), &payload])
     }
@@ -107,8 +109,7 @@ impl futures_util::sink::Sink<Event> for JoinedSockets {
 
 
 pub struct ZmqSender {
-    ctx:     tmq::Context,
-    sockets: std::sync::Arc<tokio::sync::Mutex<JoinedSockets>>,
+    sockets: Arc<Mutex<JoinedSockets>>,
 }
 
 impl ZmqSender {
@@ -139,8 +140,7 @@ impl ZmqSender {
         // set_backlog
 
         Self {
-            ctx,
-            sockets: std::sync::Arc::new(tokio::sync::Mutex::new(JoinedSockets::new(publish_socket, push_socket))),
+            sockets: Arc::new(Mutex::new(JoinedSockets::new(publish_socket, push_socket))),
         }
     }
 }
@@ -155,7 +155,7 @@ impl TryAdapter {
     }
 }
 
-impl futures_util::stream::Stream for TryAdapter {
+impl Stream for TryAdapter {
     type Item = Result<Event, TmqError>;
 
     fn poll_next(mut self: Pin<&mut Self>, ctx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
@@ -170,15 +170,6 @@ impl futures_util::stream::Stream for TryAdapter {
 
 #[async_trait]
 impl Sender for ZmqSender {
-    async fn consume_event(&self, shard_id: u64, event_name: &str, event: &[u8]) {
-        self.sockets
-            .lock()
-            .await
-            .send((shard_id, event_name.to_string(), event.to_vec()))
-            .await
-            .unwrap(); // TODO: error handling
-    }
-
     async fn consume_all(&self, stream: Box<EventStream>) {
         // TODO: error handling
         self.sockets
