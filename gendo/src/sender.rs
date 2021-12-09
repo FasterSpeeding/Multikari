@@ -52,15 +52,17 @@ impl ZmqSender {
         //     .expect("Missing ZMQ_CURVE_SERVER env variable");
 
         let ctx = tmq::Context::new();
-        let push_socket = tmq::push::push(&ctx)
-            .bind(&pipeline_address)
-            .expect("Failed to connect to ZMQ pipeline queue");
+        let push_socket = tmq::push::push(&ctx).bind(&pipeline_address).expect(format!(
+            "Failed to connect to ZMQ pipeline queue with provided address: {}",
+            &pipeline_address
+        ));
         // .set_curve_server(&curve_server)
         // set_backlog
 
-        let publish_socket = tmq::publish::publish(&ctx)
-            .bind(&publish_address)
-            .expect("Failed to connect to ZMQ publish queue");
+        let publish_socket = tmq::publish::publish(&ctx).bind(&publish_address).expect(format!(
+            "Failed to connect to ZMQ publish queue with provided path: {}",
+            &publish_address
+        ));
 
         Self {
             ctx,
