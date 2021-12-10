@@ -251,7 +251,8 @@ async fn patch_guild_voice_state(
     Ok(HttpResponse::NoContent().finish())
 }
 
-async fn actix_main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     let url = shared::get_env_variable("MANAGER_URL").expect("Missing MANAGER_URL env variable");
     let token = shared::get_env_variable("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN env variable");
     let gateway_bot = get_gateway_bot(&token).await.expect("Failed to fetch Gateway Bot info");
@@ -303,21 +304,4 @@ async fn actix_main() -> std::io::Result<()> {
         .workers(1) // This only needs 1 thread, any more would be excessive lol.
         .run()
         .await
-}
-
-fn main() -> std::io::Result<()> {
-    let dotenv_result = shared::load_env();
-    shared::setup_logging();
-
-    if let Err(error) = dotenv_result {
-        log::info!("Couldn't load .env file: {}", error);
-    }
-
-    actix_web::rt::System::with_tokio_rt(|| {
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-    })
-    .block_on(actix_main())
 }

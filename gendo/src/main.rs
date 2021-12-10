@@ -37,7 +37,7 @@ use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
 mod senders;
 use senders::Sender;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let dotenv_result = shared::load_env();
     shared::setup_logging();
