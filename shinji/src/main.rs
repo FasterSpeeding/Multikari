@@ -252,8 +252,8 @@ async fn patch_guild_voice_state(
 }
 
 async fn actix_main() -> std::io::Result<()> {
-    let url = shared::get_env_variable("URL").expect("Missing URL env variable");
-    let token = shared::get_env_variable("TOKEN").expect("Missing TOKEN env variable");
+    let url = shared::get_env_variable("MANAGER_URL").expect("Missing MANAGER_URL env variable");
+    let token = shared::get_env_variable("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN env variable");
     let gateway_bot = get_gateway_bot(&token).await.expect("Failed to fetch Gateway Bot info");
     let shard_count = shared::get_env_variable("SHARD_COUNT")
         .map(|v| v.parse().expect("Invalid SHARD_COUNT env variable"))
@@ -272,8 +272,8 @@ async fn actix_main() -> std::io::Result<()> {
     });
 
     let ssl_config = (
-        shared::get_env_variable("SSL_KEY"),
-        shared::get_env_variable("SSL_CERT"),
+        shared::get_env_variable("MANAGER_SSL_KEY"),
+        shared::get_env_variable("MANAGER_SSL_CERT"),
     );
     match ssl_config {
         (Some(ssl_key), Some(ssl_cert)) => {

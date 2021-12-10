@@ -53,8 +53,7 @@ async fn main() {
         _ => panic!("Invalid INTENTS value in env variables"),
     };
 
-    let sender = sender::ZmqSender::build().await;
-    let sender = senders::zmq::ZmqSender::build().await;
+    let sender = senders::zmq::ZmqSender::new().await;
 
     let (cluster, events) = cluster::Cluster::builder(token, intents)
         .event_types(EventTypeFlags::SHARD_PAYLOAD)
@@ -68,26 +67,29 @@ async fn main() {
         cluster.clone().up().await;
     });
 
-    let filtered = events.filter_map(async move |event| {
-        let (shard_id, event) = match event {
-            (shard_id, Event::ShardPayload(payload)) => (shard_id, payload),
-            _ => return None,
-        };
-        let payload = std::str::from_utf8(&event.bytes);
+    sender
+        .consume_all(Box::new(Box::pin(events.filter_map(map_event))))
+        .await;
+}
 
-        if payload.is_err() {
-            log::error!(
-                "Ignoring payload which failed to convert to utf8: {}",
-                payload.unwrap_err()
-            );
-            return None;
-        }
-        let payload = payload.unwrap();
+async fn map_event(event: (u64, twilight_gateway::Event)) -> Option<senders::Event> {
+    let (shard_id, event) = match event {
+        (shard_id, Event::ShardPayload(payload)) => (shard_id, payload),
+        _ => return None,
+    };
+    let payload = std::str::from_utf8(&event.bytes);
 
-        GatewayEventDeserializer::from_json(payload)
-            .map(|v| v.event_type_ref().map(|v| v.to_owned()))
-            .flatten()
-            .map(move |v| (shard_id, v, event.bytes))
-    });
-    sender.consume_all(Box::new(Box::pin(filtered))).await;
+    if payload.is_err() {
+        log::error!(
+            "Ignoring payload which failed to convert to utf8: {}",
+            payload.unwrap_err()
+        );
+        return None;
+    }
+    let payload = payload.unwrap();
+
+    GatewayEventDeserializer::from_json(payload)
+        .map(|v| v.event_type_ref().map(|v| v.to_owned()))
+        .flatten()
+        .map(move |v| (shard_id, v, event.bytes))
 }

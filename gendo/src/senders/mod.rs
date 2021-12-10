@@ -30,4 +30,4 @@
 // POSSIBILITY OF SUCH DAMAGE.
 pub mod traits;
 pub mod zmq;
-pub use traits::Sender;
+pub use traits::{Event, EventStream, Sender};
