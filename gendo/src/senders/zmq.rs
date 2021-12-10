@@ -108,10 +108,8 @@ pub struct ZmqSender {
 
 impl ZmqSender {
     pub async fn new() -> Self {
-        let publish_address =
-            shared::get_env_variable("ZMQ_PUBLISH_ADDRESS").expect("Missing ZMQ_PUBLISH_ADDRESS env variable");
-        let pipeline_address =
-            shared::get_env_variable("ZMQ_PIPELINE_ADDRESS").expect("Missing ZMQ_PIPELINE_ADDRESS env variable");
+        let publish_address = shared::get_env_variable("ZMQ_PUBLISH_ADDRESS");
+        let pipeline_address = shared::get_env_variable("ZMQ_PIPELINE_ADDRESS");
         // let curve_server = shared::get_env_variable("ZMQ_CURVE_SERVER")
         //     .expect("Missing ZMQ_CURVE_SERVER env variable");
 

@@ -59,7 +59,7 @@ pub struct GatewayBot {
 
 // Metadata
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Shard {
     pub is_active:         bool,
     pub heartbeat_latency: Option<f64>,

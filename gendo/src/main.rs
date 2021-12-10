@@ -34,6 +34,7 @@ use std::str::FromStr;
 use futures_util::StreamExt;
 use twilight_gateway::{cluster, Event, EventTypeFlags, Intents};
 use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
+mod manager;
 mod senders;
 use senders::Sender;
 
@@ -46,14 +47,17 @@ async fn main() {
         log::info!("Couldn't load .env file: {}", error);
     }
 
-    let token = shared::get_env_variable("DISCORD_TOKEN").expect("DISCORD_TOKEN env variable not found");
-    let intents = match shared::get_env_variable("DISCORD_INTENTS").map(|v| u64::from_str(&v).map(Intents::from_bits)) {
-        Some(Ok(Some(intents))) => intents,
-        None => Intents::all() & !(Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES),
-        _ => panic!("Invalid INTENTS value in env variables"),
-    };
+    let token = shared::get_env_variable("DISCORD_TOKEN");
+    let intents =
+        match shared::try_get_env_variable("DISCORD_INTENTS").map(|v| u64::from_str(&v).map(Intents::from_bits)) {
+            Some(Ok(Some(intents))) => intents,
+            None => Intents::all() & !(Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES),
+            _ => panic!("Invalid INTENTS value in env variables"),
+        };
 
     let sender = senders::zmq::ZmqSender::new().await;
+    let manager_url = shared::get_env_variable("MANAGER_URL");
+    let manager = manager::Client::new(&manager_url, &token);
 
     let (cluster, events) = cluster::Cluster::builder(token, intents)
         .event_types(EventTypeFlags::SHARD_PAYLOAD)

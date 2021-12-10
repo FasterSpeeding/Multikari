@@ -28,35 +28,34 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-#[cfg(feature = "dto")]
-pub mod dto;
+use shared::dto;
 
-use std::str::FromStr;
-
-pub fn load_env() -> dotenv::Result<std::path::PathBuf> {
-    dotenv::dotenv()
+pub struct Client {
+    authorization: String,
+    client:        reqwest::Client,
+    url:           String,
 }
 
-pub fn try_get_env_variable(key: &str) -> Option<String> {
-    dotenv::var(key).or_else(|_| std::env::var(key)).ok()
-}
-
-
-pub fn get_env_variable(key: &str) -> String {
-    try_get_env_variable(key).unwrap_or_else(|| panic!("Environment variable {} not found", key))
-}
-
-pub fn setup_logging() {
-    let level = match try_get_env_variable("LOG_LEVEL").map(|v| log::LevelFilter::from_str(&v)) {
-        Some(Err(..)) => {
-            panic!("Invalid log level provided, expected TRACE, DEBUG, INFO, WARN or ERROR")
+impl Client {
+    pub fn new(url: &str, token: &str) -> Self {
+        Self {
+            authorization: format!("Basic {}", base64::encode(&format!("__token__:{}", token))),
+            client:        reqwest::Client::new(),
+            url:           url.to_owned(),
         }
-        Some(Ok(level)) => level,
-        None => log::LevelFilter::Info,
-    };
+    }
 
-    simple_logger::SimpleLogger::new()
-        .with_level(level)
-        .init()
-        .expect("Failed to set up logger");
+    fn start_request(&self, endpoint: &str, method: reqwest::Method) -> reqwest::RequestBuilder {
+        self.client
+            .request(method, &format!("{}/{}", self.url, endpoint))
+            .header("Authorization", &self.authorization)
+    }
+
+    async fn get_shard(&self, shard_id: u64) -> Result<dto::Shard, reqwest::Error> {
+        self.start_request(&format!("shards/{}", shard_id), reqwest::Method::GET)
+            .send()
+            .await?
+            .json()
+            .await
+    }
 }

@@ -182,6 +182,11 @@ async fn get_shards(
     Ok(HttpResponse::Ok().json(shards))
 }
 
+#[get("/shards/{shard_id}/presence")]
+async fn get_shard_presence(_req: HttpRequest) -> Result<HttpResponse, InternalError<&'static str>> {
+    Ok(HttpResponse::Ok().finish())
+}
+
 #[patch("/shards/{shard_id}/presence")]
 async fn patch_shard_presence(
     req: HttpRequest,
@@ -251,12 +256,12 @@ async fn patch_guild_voice_state(
     Ok(HttpResponse::NoContent().finish())
 }
 
-#[tokio::main]
+#[tokio::main(flavor = "current_thread")]
 async fn main() -> std::io::Result<()> {
-    let url = shared::get_env_variable("MANAGER_URL").expect("Missing MANAGER_URL env variable");
-    let token = shared::get_env_variable("DISCORD_TOKEN").expect("Missing DISCORD_TOKEN env variable");
+    let url = shared::get_env_variable("MANAGER_URL");
+    let token = shared::get_env_variable("DISCORD_TOKEN");
     let gateway_bot = get_gateway_bot(&token).await.expect("Failed to fetch Gateway Bot info");
-    let shard_count = shared::get_env_variable("SHARD_COUNT")
+    let shard_count = shared::try_get_env_variable("SHARD_COUNT")
         .map(|v| v.parse().expect("Invalid SHARD_COUNT env variable"))
         .unwrap_or(gateway_bot.shards);
 
@@ -272,33 +277,19 @@ async fn main() -> std::io::Result<()> {
             .service(patch_shard_presence)
     });
 
-    let ssl_config = (
-        shared::get_env_variable("MANAGER_SSL_KEY"),
-        shared::get_env_variable("MANAGER_SSL_CERT"),
-    );
-    match ssl_config {
-        (Some(ssl_key), Some(ssl_cert)) => {
-            log::info!("Starting with SSL");
-            let mut ssl_acceptor =
-                SslAcceptor::mozilla_intermediate(SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
-            ssl_acceptor
-                .set_private_key_file(&ssl_key, SslFiletype::PEM)
-                .expect("Couldn't process private key file");
-            ssl_acceptor
-                .set_certificate_chain_file(&ssl_cert)
-                .expect("Couldn't process certificate file");
+    let ssl_key = shared::get_env_variable("MANAGER_SSL_KEY");
+    let ssl_cert = shared::get_env_variable("MANAGER_SSL_CERT");
+    log::info!("Starting with SSL");
+    let mut ssl_acceptor =
+        SslAcceptor::mozilla_intermediate(SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
+    ssl_acceptor
+        .set_private_key_file(&ssl_key, SslFiletype::PEM)
+        .expect("Couldn't process private key file");
+    ssl_acceptor
+        .set_certificate_chain_file(&ssl_cert)
+        .expect("Couldn't process certificate file");
 
-            server = server.bind_openssl(&url, ssl_acceptor)?;
-        }
-        (None, None) => {
-            log::info!("No SSL key/cert provided, starting without SSL");
-            server = server.bind(&url)?;
-        }
-        _ => {
-            log::warn!("Missing SSL_KEY or SSL_CERT, both are required for SSL");
-            server = server.bind(&url)?;
-        }
-    }
+    server = server.bind_openssl(&url, ssl_acceptor)?;
 
     server
         .workers(1) // This only needs 1 thread, any more would be excessive lol.
