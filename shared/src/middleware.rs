@@ -59,10 +59,11 @@ impl TokenAuth {
     }
 }
 
-impl<S, B: 'static> Transform<S, ServiceRequest> for TokenAuth
+impl<S, B> Transform<S, ServiceRequest> for TokenAuth
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = Error>,
     S::Future: 'static,
+    B: 'static,
 {
     type Error = Error;
     type Future = Ready<Result<Self::Transform, Self::InitError>>;
@@ -87,10 +88,11 @@ where
 }
 
 
-impl<S, B: 'static> Service<ServiceRequest> for TokenAuthWrapper<S, B>
+impl<S, B> Service<ServiceRequest> for TokenAuthWrapper<S, B>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
     S::Future: 'static,
+    B: 'static,
 {
     type Error = S::Error;
     type Future = Pin<Box<dyn Future<Output = Result<Self::Response, Self::Error>>>>;
