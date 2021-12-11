@@ -44,16 +44,16 @@ where
 
 #[derive(Debug, Deserialize)]
 pub struct SessionStartLimit {
-    pub total:           u64,
-    pub remaining:       u64,
-    pub reset_after:     u64,
+    pub total: u64,
+    pub remaining: u64,
+    pub reset_after: u64,
     pub max_concurrency: u64,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct GatewayBot {
-    pub url:                 String,
-    pub shards:              u64,
+    pub url: String,
+    pub shards: u64,
     pub session_start_limit: SessionStartLimit,
 }
 
@@ -61,9 +61,9 @@ pub struct GatewayBot {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Shard {
-    pub is_active:         bool,
+    pub is_active: bool,
     pub heartbeat_latency: Option<f64>,
-    pub shard_id:          u64,
+    pub shard_id: u64,
 }
 
 // Gateway Requests
@@ -75,13 +75,13 @@ pub struct GuildRequestMembers {
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    pub query:     Option<String>,
+    pub query: Option<String>,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    pub limit:     Option<u64>,
+    pub limit: Option<u64>,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
@@ -93,13 +93,13 @@ pub struct GuildRequestMembers {
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    pub user_ids:  Option<Vec<u64>>, //  TODO: is there a length limit here lol?
+    pub user_ids: Option<Vec<u64>>, //  TODO: is there a length limit here lol?
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    pub nonce:     Option<String>,
+    pub nonce: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -116,13 +116,13 @@ pub struct VoiceStateUpdate {
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    pub self_mute:  Option<bool>,
+    pub self_mute: Option<bool>,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    pub self_deaf:  Option<bool>,
+    pub self_deaf: Option<bool>,
 }
 
 #[repr(i8)]
@@ -137,22 +137,22 @@ pub enum ActivityType {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Activity {
-    pub name:   String,
+    pub name: String,
     pub r#type: ActivityType,
     #[serde(
         default,
         deserialize_with = "deserialize_some",
         skip_serializing_if = "Option::is_none"
     )]
-    pub url:    Option<Option<String>>, // TODO: what happens if url is null for a type which doesn't take url?
+    pub url: Option<Option<String>>, // TODO: what happens if url is null for a type which doesn't take url?
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct PresenceUpdate {
     // TODO: can this just not be included?
-    pub since:      Option<u64>,
+    pub since: Option<u64>,
     pub activities: Vec<Activity>, // TODO: what's the max amount?
-    pub status:     String,
+    pub status: String,
     #[serde(default)] // TODO: is this optional on the actual api?
-    pub afk:        bool, //  TODO: also what happens if this isn't included and they're already afk?
+    pub afk: bool, //  TODO: also what happens if this isn't included and they're already afk?
 }

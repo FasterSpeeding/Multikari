@@ -43,7 +43,7 @@ use crate::senders::traits::{Event, EventStream, Sender};
 
 struct JoinedSockets {
     publish_socket: tmq::publish::Publish,
-    push_socket:    tmq::push::Push,
+    push_socket: tmq::push::Push,
 }
 
 impl JoinedSockets {

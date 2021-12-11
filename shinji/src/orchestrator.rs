@@ -103,8 +103,8 @@ impl std::error::Error for Error {
 pub struct Shard {
     is_active: bool,
     last_seen: Option<std::time::Instant>,
-    latency:   Option<f64>,
-    shard_id:  u64,
+    latency: Option<f64>,
+    shard_id: u64,
 }
 
 impl Shard {
@@ -146,9 +146,9 @@ impl Shard {
 
     pub fn to_dto(&self) -> dto::Shard {
         dto::Shard {
-            is_active:         self.is_active,
+            is_active: self.is_active,
             heartbeat_latency: self.latency,
-            shard_id:          self.shard_id,
+            shard_id: self.shard_id,
         }
     }
 }
@@ -168,7 +168,7 @@ pub trait Orchestrator {
 #[derive(Debug)]
 pub struct ZmqOrchestrator {
     shard_count: u64,
-    shards:      std::collections::BTreeMap<u64, RwLock<Shard>>,
+    shards: std::collections::BTreeMap<u64, RwLock<Shard>>,
 }
 
 impl ZmqOrchestrator {

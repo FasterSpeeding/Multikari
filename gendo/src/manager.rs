@@ -33,16 +33,16 @@ use shared::dto;
 
 pub struct Client {
     authorization: String,
-    client:        reqwest::Client,
-    url:           String,
+    client: reqwest::Client,
+    url: String,
 }
 
 impl Client {
     pub fn new(url: &str, token: &str) -> Self {
         Self {
             authorization: format!("Basic {}", base64::encode(&format!("__token__:{}", token))),
-            client:        reqwest::Client::new(),
-            url:           url.to_owned(),
+            client: reqwest::Client::new(),
+            url: url.to_owned(),
         }
     }
 

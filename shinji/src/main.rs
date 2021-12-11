@@ -44,7 +44,7 @@ use shared::middleware;
 
 #[derive(Debug)]
 struct FailedRequest {
-    message:     String,
+    message: String,
     status_code: u16,
 }
 

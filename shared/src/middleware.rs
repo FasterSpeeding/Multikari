@@ -84,7 +84,7 @@ where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
     S::Future: 'static, {
     service: S,
-    token:   String,
+    token: String,
 }
 
 
