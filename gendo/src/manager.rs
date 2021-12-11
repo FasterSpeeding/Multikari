@@ -28,6 +28,7 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
+use actix_web::http::header;
 use shared::dto;
 
 pub struct Client {
@@ -48,7 +49,7 @@ impl Client {
     fn start_request(&self, endpoint: &str, method: reqwest::Method) -> reqwest::RequestBuilder {
         self.client
             .request(method, &format!("{}/{}", self.url, endpoint))
-            .header("Authorization", &self.authorization)
+            .header(header::AUTHORIZATION, &self.authorization)
     }
 
     async fn get_shard(&self, shard_id: u64) -> Result<dto::Shard, reqwest::Error> {

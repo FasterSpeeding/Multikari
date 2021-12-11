@@ -11,6 +11,18 @@ dotenv = "0.15.0"
 log = "0.4.14"
 simple_logger = "1.11.0"
 
+[dependencies.actix-web]
+optional = true
+version = "4.0.0-beta.14"
+
+[dependencies.actix-utils]
+optional = true
+version = "3.0.0"
+
+[dependencies.base64]
+optional = true
+version = "0.13"
+
 [dependencies.serde_json]
 optional = true
 version = "1.0.59"
@@ -25,3 +37,4 @@ version = "1.0.130"
 
 [features]
 dto = ["serde_json", "serde_repr"]
+middleware = ["actix-web", "actix-utils", "base64"]

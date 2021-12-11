@@ -18,14 +18,14 @@ twilight-model = "0.7"
 
 [dependencies.actix-web]
 features = ["openssl"]
-version = "4.0.0-beta.13"
+version = "4.0.0-beta.14"
 
 [dependencies.reqwest]
 features = ["json"]
 version = "0.11"
 
 [dependencies.shared]
-features = ["dto"]
+features = ["dto", "middleware"]
 path = "../shared"
 
 [dependencies.tmq]

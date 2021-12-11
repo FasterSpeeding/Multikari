@@ -30,6 +30,8 @@
 // POSSIBILITY OF SUCH DAMAGE.
 #[cfg(feature = "dto")]
 pub mod dto;
+#[cfg(feature = "middleware")]
+pub mod middleware;
 
 use std::str::FromStr;
 

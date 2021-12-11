@@ -39,6 +39,7 @@ use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use rand::Rng;
 use shared::dto;
 mod orchestrator;
+use shared::middleware;
 
 
 #[derive(Debug)]
@@ -114,54 +115,12 @@ async fn get_gateway_bot(token: &str) -> Result<dto::GatewayBot, Box<dyn std::er
     }
 }
 
-#[inline]
-fn bad_token() -> InternalError<&'static str> {
-    InternalError::new("Missing or invalid authorization header", StatusCode::UNAUTHORIZED)
-}
-
-// TODO: this is never gonna happen cause i'm too dumb to understand the docs
-// but could this be made a middleware which just apples to every endpoint?
-struct Token {
-    token: String,
-}
-
-impl Token {
-    pub fn new(token: &str) -> Self {
-        Self {
-            token: base64::encode(format!("__token__:{}", token))
-                .trim_end_matches('=')
-                .to_string(),
-        }
-    }
-
-    fn check(&self, req: &HttpRequest) -> Result<(), InternalError<&'static str>> {
-        let (token_type, auth) = req
-            .headers()
-            .get(reqwest::header::AUTHORIZATION)
-            .map(|v| v.to_str().ok())
-            .flatten()
-            .map(|v| v.split_once(' '))
-            .flatten()
-            .ok_or_else(bad_token)?;
-
-        if !token_type.eq_ignore_ascii_case("Basic") {
-            Err(bad_token())
-        } else if auth.trim_end_matches('=') == self.token {
-            Ok(())
-        } else {
-            Err(InternalError::new("Unknown token", StatusCode::UNAUTHORIZED))
-        }
-    }
-}
 
 #[get("/shards/{shard_id}")]
 async fn get_shard_by_id(
-    req: HttpRequest,
     shard_id: web::Path<u64>,
     orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
-    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
-    token.check(&req)?;
     let shard = orch
         .get_shard(shard_id.into_inner())
         .await
@@ -173,11 +132,8 @@ async fn get_shard_by_id(
 
 #[get("/shards")]
 async fn get_shards(
-    req: HttpRequest,
     orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
-    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
-    token.check(&req)?;
     let shards: Vec<_> = orch.get_shards().await.iter().map(|v| v.to_dto()).collect();
     Ok(HttpResponse::Ok().json(shards))
 }
@@ -189,13 +145,10 @@ async fn get_shard_presence(_req: HttpRequest) -> Result<HttpResponse, InternalE
 
 #[patch("/shards/{shard_id}/presence")]
 async fn patch_shard_presence(
-    req: HttpRequest,
     shard_id: web::Path<u64>,
     data: web::Json<dto::PresenceUpdate>,
     orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
-    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
-    token.check(&req)?;
     // TODO: are these case-sensitive?
     if !["online", "dnd", "idle", "invisible", "offline"].contains(&data.status.as_ref()) {
         return Err(InternalError::new("Invalid presence status", StatusCode::BAD_REQUEST));
@@ -212,13 +165,10 @@ async fn patch_shard_presence(
 
 #[post("/guilds/{guild_id}/request-members")]
 async fn request_members(
-    req: HttpRequest,
     guild_id: web::Path<u64>,
     data: web::Json<dto::GuildRequestMembers>,
     orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
-    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
-    token.check(&req)?;
     let guild_id = guild_id.into_inner();
     let shard_id = orch.get_guild_shard(guild_id);
 
@@ -235,13 +185,10 @@ async fn request_members(
 
 #[patch("/guilds/{guild_id}/voice-state")]
 async fn patch_guild_voice_state(
-    req: HttpRequest,
     guild_id: web::Path<u64>,
     data: web::Json<dto::VoiceStateUpdate>,
     orch: web::Data<Arc<dyn orchestrator::Orchestrator>>,
-    token: web::Data<Token>,
 ) -> Result<HttpResponse, InternalError<&'static str>> {
-    token.check(&req)?;
     let guild_id = guild_id.into_inner();
     let shard_id = orch.get_guild_shard(guild_id);
 
@@ -269,7 +216,8 @@ async fn main() -> std::io::Result<()> {
     let mut server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(Arc::clone(&orch) as Arc<dyn orchestrator::Orchestrator>))
-            .app_data(web::Data::new(Token::new(&token)))
+            .wrap(middleware::TokenAuth::new(&token))
+            .wrap(actix_web::middleware::Logger::default())
             .service(get_shard_by_id)
             .service(get_shards)
             .service(request_members)
