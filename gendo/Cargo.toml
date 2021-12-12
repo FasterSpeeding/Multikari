@@ -10,6 +10,7 @@ authors = ["Faster Speeding <lucina@lmbyrne.dev>"]
 async-trait = "0.1"
 # async_zmq = "0.3.2"
 base64 = "0.13"
+closure = "0.3.0"
 futures-util = "0.3"
 log = "0.4"
 # tokio-zmq = "0.10.1"
@@ -19,6 +20,10 @@ twilight-model = "0.7"
 [dependencies.actix-web]
 features = ["openssl"]
 version = "4.0.0-beta.14"
+
+[dependencies.openssl]
+# features = ["vendored"]
+version = "0.10"  # Needs libssl-dev
 
 [dependencies.reqwest]
 features = ["json"]

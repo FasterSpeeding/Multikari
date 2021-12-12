@@ -205,7 +205,9 @@ async fn patch_guild_voice_state(
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> std::io::Result<()> {
-    let url = shared::get_env_variable("MANAGER_URL");
+    shared::setup();
+
+    let url = shared::strip_url(shared::get_env_variable("MANAGER_URL"));
     let token = shared::get_env_variable("DISCORD_TOKEN");
     let gateway_bot = get_gateway_bot(&token).await.expect("Failed to fetch Gateway Bot info");
     let shard_count = shared::try_get_env_variable("SHARD_COUNT")

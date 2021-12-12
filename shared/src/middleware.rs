@@ -46,6 +46,7 @@ fn bad_token<O>() -> Ready<Result<O, Error>> {
     error_early("Missing or invalid authorization header", StatusCode::UNAUTHORIZED)
 }
 
+#[derive(Clone)]
 pub struct TokenAuth {
     token: String,
 }
@@ -79,6 +80,7 @@ where
     }
 }
 
+#[derive(Clone)]
 pub struct TokenAuthWrapper<S, B>
 where
     S: Service<ServiceRequest, Response = ServiceResponse<B>, Error = actix_web::Error>,
@@ -86,7 +88,6 @@ where
     service: S,
     token: String,
 }
-
 
 impl<S, B> Service<ServiceRequest> for TokenAuthWrapper<S, B>
 where

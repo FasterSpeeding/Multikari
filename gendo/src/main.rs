@@ -31,22 +31,26 @@
 #![feature(async_closure)]
 use std::str::FromStr;
 
+use actix_web::{get, patch, post, web, App, HttpRequest, HttpResponse, HttpServer};
+use closure::closure;
 use futures_util::StreamExt;
-use twilight_gateway::{cluster, Event, EventTypeFlags, Intents};
+use shared::middleware;
+use twilight_gateway::{Cluster, Event, EventTypeFlags, Intents};
 use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
 mod manager;
-mod senders;
+use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
 use senders::Sender;
+mod senders;
+use std::io;
+use std::sync::Arc;
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    let dotenv_result = shared::load_env();
-    shared::setup_logging();
+    shared::setup();
 
-    if let Err(error) = dotenv_result {
-        log::info!("Couldn't load .env file: {}", error);
-    }
-
+    let manager_url = shared::unstrip_url(shared::get_env_variable("MANAGER_URL"));
+    let url = shared::strip_url(shared::get_env_variable("GATEWAY_WORKER_URL"));
+    let url_has_port = url.split_once(':').is_some();
     let token = shared::get_env_variable("DISCORD_TOKEN");
     let intents =
         match shared::try_get_env_variable("DISCORD_INTENTS").map(|v| u64::from_str(&v).map(Intents::from_bits)) {
@@ -55,25 +59,84 @@ async fn main() {
             _ => panic!("Invalid INTENTS value in env variables"),
         };
 
+    let manager = Arc::new(manager::Client::new(&manager_url, &token));
     let sender = senders::zmq::ZmqSender::new().await;
-    let manager_url = shared::get_env_variable("MANAGER_URL");
-    let manager = manager::Client::new(&manager_url, &token);
-
-    let (cluster, events) = cluster::Cluster::builder(token, intents)
+    let (cluster, events) = Cluster::builder(&token, intents)
         .event_types(EventTypeFlags::SHARD_PAYLOAD)
         .build()
         .await
         .expect("Failed to make gateway connection");
 
     let cluster = std::sync::Arc::new(cluster);
-
+    let start_cluster = cluster.clone();
     tokio::spawn(async move {
-        cluster.clone().up().await;
+        start_cluster.up().await;
     });
 
-    sender
-        .consume_all(Box::new(Box::pin(events.filter_map(map_event))))
-        .await;
+    let ssl_key = shared::get_env_variable("MANAGER_SSL_KEY");
+    let ssl_cert = shared::get_env_variable("MANAGER_SSL_CERT");
+    log::info!("Starting with SSL");
+
+
+    let mut server: Option<HttpServer<_, _, _, _>> = None;
+    for port in 4000..5000 {
+        //  Allow the port to be specified for a specific instance.
+        let bind_url = if url_has_port {
+            url.clone()
+        } else {
+            format!("{}:{}", url, port)
+        };
+
+        let mut ssl_acceptor =
+            SslAcceptor::mozilla_intermediate(SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
+        ssl_acceptor
+            .set_private_key_file(&ssl_key, SslFiletype::PEM)
+            .expect("Couldn't process private key file");
+        ssl_acceptor
+            .set_certificate_chain_file(&ssl_cert)
+            .expect("Couldn't process certificate file");
+
+        let bind_result = HttpServer::new(closure!(clone cluster, clone manager, clone token, || {
+            App::new()
+                .wrap(middleware::TokenAuth::new(&token))
+                .app_data(web::Data::new(cluster.clone()))
+                .app_data(web::Data::new(manager.clone()))
+            // .service(get_shard_by_id)
+        }))
+        .bind_openssl(&bind_url, ssl_acceptor);
+
+        server = match bind_result.map_err(|v| v.kind()) {
+            Ok(server) => {
+                log::info!("Binding to address {}", bind_url);
+                Some(server)
+            }
+            Err(io::ErrorKind::AddrInUse) => {
+                if url_has_port {
+                    //  Allow the port to be specified for a specific instance.
+                    panic!("Couldn't bind address {}, it's already in use", url);
+                }
+                log::debug!("Skipping address {}, it's already in use", bind_url);
+                continue;
+            }
+            Err(error) => {
+                panic!("Failed to bind to address {}: {:?}", bind_url, error);
+            }
+        };
+        break;
+    }
+
+    if let Some(server) = server {
+        // TODO: consider using try_join
+        futures_util::try_join!(server.run(), async {
+            sender
+                .consume_all(Box::new(Box::pin(events.filter_map(map_event))))
+                .await;
+            Ok(())
+        })
+        .expect("Failed to start")
+    } else {
+        panic!("Failed to allocate any port on path {}", url)
+    };
 }
 
 async fn map_event(event: (u64, twilight_gateway::Event)) -> Option<senders::Event> {

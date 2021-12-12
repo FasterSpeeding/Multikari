@@ -43,9 +43,21 @@ pub fn try_get_env_variable(key: &str) -> Option<String> {
     dotenv::var(key).or_else(|_| std::env::var(key)).ok()
 }
 
-
 pub fn get_env_variable(key: &str) -> String {
     try_get_env_variable(key).unwrap_or_else(|| panic!("Environment variable {} not found", key))
+}
+
+pub fn strip_url<S: Into<String>>(url: S) -> String {
+    url.into().replacen("http://", "", 1).replacen("https://", "", 1)
+}
+
+pub fn unstrip_url<S: Into<String>>(url: S) -> String {
+    let url = url.into();
+    if !url.starts_with("http://") && !url.starts_with("https://") {
+        format!("https://{}", url)
+    } else {
+        url
+    }
 }
 
 pub fn setup_logging() {
@@ -61,4 +73,13 @@ pub fn setup_logging() {
         .with_level(level)
         .init()
         .expect("Failed to set up logger");
+}
+
+pub fn setup() {
+    let dotenv_result = load_env();
+    setup_logging();
+
+    if let Err(error) = dotenv_result {
+        log::info!("Couldn't load .env file: {}", error);
+    }
 }
