@@ -76,7 +76,7 @@ async fn get_gateway_bot(token: &str) -> Result<dto::GatewayBot, Box<dyn std::er
 
     loop {
         let response = client
-            .get("https://discord.com/api/gateway/bot")
+            .get("https://discord.com/api/v9/gateway/bot")
             .header(reqwest::header::AUTHORIZATION, format!("Bot {}", token))
             .send()
             .await?;
