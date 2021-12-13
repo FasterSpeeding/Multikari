@@ -34,11 +34,9 @@ use std::str::FromStr;
 use actix_web::{get, patch, post, web, App, HttpRequest, HttpResponse, HttpServer};
 use closure::closure;
 use futures_util::StreamExt;
-use shared::middleware;
-use twilight_gateway::{Cluster, Event, EventTypeFlags, Intents};
-use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
+use twilight_gateway::Intents;
 mod manager;
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use openssl::ssl;
 use senders::Sender;
 mod senders;
 use std::io;
@@ -61,8 +59,8 @@ async fn main() {
 
     let manager = Arc::new(manager::Client::new(&manager_url, &token));
     let sender = senders::zmq::ZmqSender::new().await;
-    let (cluster, events) = Cluster::builder(&token, intents)
-        .event_types(EventTypeFlags::SHARD_PAYLOAD)
+    let (cluster, events) = twilight_gateway::Cluster::builder(&token, intents)
+        .event_types(twilight_gateway::EventTypeFlags::SHARD_PAYLOAD)
         .build()
         .await
         .expect("Failed to make gateway connection");
@@ -87,10 +85,10 @@ async fn main() {
             format!("{}:{}", url, port)
         };
 
-        let mut ssl_acceptor =
-            SslAcceptor::mozilla_intermediate(SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
+        let mut ssl_acceptor = ssl::SslAcceptor::mozilla_intermediate(ssl::SslMethod::tls_server())
+            .expect("Failed to creatte ssl acceptor");
         ssl_acceptor
-            .set_private_key_file(&ssl_key, SslFiletype::PEM)
+            .set_private_key_file(&ssl_key, ssl::SslFiletype::PEM)
             .expect("Couldn't process private key file");
         ssl_acceptor
             .set_certificate_chain_file(&ssl_cert)
@@ -98,11 +96,13 @@ async fn main() {
 
         let bind_result = HttpServer::new(closure!(clone cluster, clone manager, clone token, || {
             App::new()
-                .wrap(middleware::TokenAuth::new(&token))
+                .wrap(shared::middleware::TokenAuth::new(&token))
+                .wrap(actix_web::middleware::Logger::default())
                 .app_data(web::Data::new(cluster.clone()))
                 .app_data(web::Data::new(manager.clone()))
-            // .service(get_shard_by_id)
+                // .service(get_shard_by_id)
         }))
+        .workers(1)
         .bind_openssl(&bind_url, ssl_acceptor);
 
         server = match bind_result.map_err(|v| v.kind()) {
@@ -112,7 +112,7 @@ async fn main() {
             }
             Err(io::ErrorKind::AddrInUse) => {
                 if url_has_port {
-                    //  Allow the port to be specified for a specific instance.
+                    //  Allows the port to be specified for a specific instance.
                     panic!("Couldn't bind address {}, it's already in use", url);
                 }
                 log::debug!("Skipping address {}, it's already in use", bind_url);
@@ -125,23 +125,31 @@ async fn main() {
         break;
     }
 
-    if let Some(server) = server {
-        // TODO: consider using try_join
-        futures_util::try_join!(server.run(), async {
-            sender
-                .consume_all(Box::new(Box::pin(events.filter_map(map_event))))
-                .await;
-            Ok(())
-        })
-        .expect("Failed to start")
+    if let Some(server) = server.map(|s| s.run()) {
+        let handle = server.handle();
+        futures_util::join!(
+            async {
+                // Todo: error handling?
+                server.await.expect("Failed to start server");
+                log::info!("Server stopped, closing gateway connection");
+                cluster.down_resumable();
+            },
+            async {
+                sender
+                    .consume_all(Box::new(Box::pin(events.filter_map(map_event))))
+                    .await;
+                log::info!("Gateway stopped, closing server");
+                handle.stop(true).await;
+            }
+        );
     } else {
         panic!("Failed to allocate any port on path {}", url)
     };
 }
 
-async fn map_event(event: (u64, twilight_gateway::Event)) -> Option<senders::Event> {
-    let (shard_id, event) = match event {
-        (shard_id, Event::ShardPayload(payload)) => (shard_id, payload),
+async fn map_event((shard_id, event): (u64, twilight_gateway::Event)) -> Option<senders::Event> {
+    let event = match event {
+        twilight_gateway::Event::ShardPayload(payload) => payload,
         _ => return None,
     };
     let payload = std::str::from_utf8(&event.bytes);
@@ -155,7 +163,7 @@ async fn map_event(event: (u64, twilight_gateway::Event)) -> Option<senders::Eve
     }
     let payload = payload.unwrap();
 
-    GatewayEventDeserializer::from_json(payload)
+    twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(payload)
         .map(|v| v.event_type_ref().map(|v| v.to_owned()))
         .flatten()
         .map(move |v| (shard_id, v, event.bytes))

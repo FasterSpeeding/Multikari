@@ -35,11 +35,10 @@ use std::sync::Arc;
 use actix_web::error::InternalError;
 use actix_web::http::StatusCode;
 use actix_web::{get, patch, post, web, App, HttpRequest, HttpResponse, HttpServer};
-use openssl::ssl::{SslAcceptor, SslFiletype, SslMethod};
+use openssl::ssl;
 use rand::Rng;
 use shared::dto;
 mod orchestrator;
-use shared::middleware;
 
 
 #[derive(Debug)]
@@ -218,7 +217,7 @@ async fn main() -> std::io::Result<()> {
     let mut server = HttpServer::new(move || {
         App::new()
             .app_data(web::Data::new(Arc::clone(&orch) as Arc<dyn orchestrator::Orchestrator>))
-            .wrap(middleware::TokenAuth::new(&token))
+            .wrap(shared::middleware::TokenAuth::new(&token))
             .wrap(actix_web::middleware::Logger::default())
             .service(get_shard_by_id)
             .service(get_shards)
@@ -231,9 +230,9 @@ async fn main() -> std::io::Result<()> {
     let ssl_cert = shared::get_env_variable("MANAGER_SSL_CERT");
     log::info!("Starting with SSL");
     let mut ssl_acceptor =
-        SslAcceptor::mozilla_intermediate(SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
+        ssl::SslAcceptor::mozilla_intermediate(ssl::SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
     ssl_acceptor
-        .set_private_key_file(&ssl_key, SslFiletype::PEM)
+        .set_private_key_file(&ssl_key, ssl::SslFiletype::PEM)
         .expect("Couldn't process private key file");
     ssl_acceptor
         .set_certificate_chain_file(&ssl_cert)
