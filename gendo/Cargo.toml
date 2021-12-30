@@ -14,8 +14,8 @@ closure = "0.3.0"
 futures-util = "0.3"
 log = "0.4"
 # tokio-zmq = "0.10.1"
-twilight-gateway = "0.7"
-twilight-model = "0.7"
+twilight-gateway = "0.8"
+twilight-model = "0.8"
 
 [dependencies.actix-web]
 features = ["openssl"]

@@ -101,24 +101,24 @@ impl std::error::Error for Error {
 
 #[derive(Debug)]
 pub struct Shard {
-    is_active: bool,
+    is_alive: bool,
     last_seen: Option<std::time::Instant>,
     latency: Option<f64>,
+    session_id: Option<String>,
+    seq: Option<u64>,
     shard_id: u64,
 }
 
 impl Shard {
     fn new(shard_id: u64) -> Self {
         Self {
-            is_active: false,
+            is_alive: false,
             last_seen: None,
             latency: None,
+            session_id: None,
+            seq: None,
             shard_id,
         }
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.is_active
     }
 
     pub fn last_seen_at(&self) -> &Option<std::time::Instant> {
@@ -129,25 +129,12 @@ impl Shard {
         &self.latency
     }
 
-    pub fn set_heartbeat_latency(&mut self, latency: f64) -> &mut Self {
-        self.latency = Some(latency);
-        self
-    }
-
-    pub fn set_last_seen(&mut self, last_seen: std::time::Instant) -> &mut Self {
-        self.last_seen = Some(last_seen);
-        self
-    }
-
-    pub fn set_is_active(&mut self, is_active: bool) -> &mut Self {
-        self.is_active = is_active;
-        self
-    }
-
     pub fn to_dto(&self) -> dto::Shard {
         dto::Shard {
-            is_active: self.is_active,
             heartbeat_latency: self.latency,
+            is_alive: self.is_alive,
+            session_id: self.session_id.clone(),
+            seq: self.seq,
             shard_id: self.shard_id,
         }
     }

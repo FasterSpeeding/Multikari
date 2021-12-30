@@ -61,8 +61,10 @@ pub struct GatewayBot {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Shard {
-    pub is_active: bool,
     pub heartbeat_latency: Option<f64>,
+    pub is_alive: bool,
+    pub session_id: Option<String>,
+    pub seq: Option<u64>,
     pub shard_id: u64,
 }
 
