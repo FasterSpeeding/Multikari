@@ -29,6 +29,7 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 #![feature(async_closure)]
+use std::collections::HashSet;
 use std::io;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -38,24 +39,35 @@ use actix_web::{get, patch, post, App, HttpRequest, HttpResponse, HttpServer};
 use closure::closure;
 use futures_util::StreamExt;
 use openssl::ssl;
+use tokio::sync::RwLock;
 mod manager;
 mod senders;
 use senders::Sender;
 use shared::dto;
 use twilight_gateway::{Cluster, Intents};
 
-fn shard_to_dto(shard: &twilight_gateway::Shard) -> dto::Shard {
-    let is_alive;
+struct DownedShards {
+    pub shard_ids: RwLock<HashSet<u64>>,
+}
+
+impl DownedShards {
+    fn new() -> Self {
+        Self {
+            shard_ids: RwLock::new(HashSet::new()),
+        }
+    }
+}
+
+
+fn shard_to_dto(shard: &twilight_gateway::Shard, is_alive: bool) -> dto::Shard {
     let latency;
     let session_id;
     let seq;
     if let Ok(info) = shard.info() {
-        is_alive = true;
         latency = info.latency().recent().back().map(std::time::Duration::as_secs_f64);
         session_id = info.session_id().map(str::to_string);
         seq = Some(info.seq())
     } else {
-        is_alive = false;
         latency = None;
         session_id = None;
         seq = None;
@@ -83,38 +95,71 @@ fn disconnect_to_dto(shard: &twilight_gateway::Shard, resume: twilight_gateway::
 }
 
 #[post("/disconnect")]
-async fn post_disconnect(cluster: Data<Arc<Cluster>>) -> HttpResponse {
+async fn post_disconnect(cluster: Data<Arc<Cluster>>, downed_shards: Data<Arc<DownedShards>>) -> HttpResponse {
+    let mut downed_shards = downed_shards.shard_ids.write().await;
+
     let results = cluster
         .down_resumable()
         .drain()
+        // Don't bother with already disconnected shards!!!
+        .filter(|(shard_id, resume)| !downed_shards.contains(shard_id))
         .map(|(shard_id, resume)| disconnect_to_dto(cluster.shard(shard_id).unwrap(), resume))
         .collect::<Vec<_>>();
 
+    downed_shards.extend(results.iter().map(|s| s.shard_id));
     HttpResponse::Ok().json(results)
 }
 
 #[get("/status")]
-async fn get_status(cluster: Data<Arc<Cluster>>) -> HttpResponse {
-    // TODO: need to diffentiate between alive and not alive shards
-    HttpResponse::Ok().json(cluster.shards().map(shard_to_dto).collect::<Vec<_>>())
+async fn get_status(cluster: Data<Arc<Cluster>>, downed_shards: Data<Arc<DownedShards>>) -> HttpResponse {
+    let downed_shards = downed_shards.shard_ids.read().await;
+    let response = cluster
+        .shards()
+        .map(|s| shard_to_dto(s, s.info().is_ok() && !downed_shards.contains(&s.config().shard()[0])))
+        .collect::<Vec<_>>();
+
+    HttpResponse::Ok().json(response)
 }
 
 #[get("/shards/{shard_id}/status")]
-async fn get_shard_status(cluster: Data<Arc<Cluster>>, shard_id: Path<u64>) -> HttpResponse {
-    if let Some(shard) = cluster.shard(shard_id.into_inner()) {
-        // TODO: need to diffentiate between alive and not alive shards
-        HttpResponse::Ok().json(shard_to_dto(shard))
+async fn get_shard_status(
+    cluster: Data<Arc<Cluster>>,
+    shard_id: Path<u64>,
+    downed_shards: Data<Arc<DownedShards>>,
+) -> HttpResponse {
+    let shard_id = shard_id.into_inner();
+    if let Some(shard) = cluster.shard(shard_id) {
+        let downed_shards = downed_shards.shard_ids.read().await;
+
+        HttpResponse::Ok().json(shard_to_dto(
+            shard,
+            shard.info().is_ok() && !downed_shards.contains(&shard_id),
+        ))
     } else {
         HttpResponse::NotFound().body("Shard not found")
     }
 }
 
 #[post("/shards/{shard_id}/disconnect")]
-async fn post_shard_disconnect(cluster: Data<Arc<Cluster>>, shard_id: Path<u64>) -> HttpResponse {
-    if let Some(shard) = cluster.shard(shard_id.into_inner()) {
+async fn post_shard_disconnect(
+    cluster: Data<Arc<Cluster>>,
+    shard_id: Path<u64>,
+    downed_shards: Data<Arc<DownedShards>>,
+) -> HttpResponse {
+    let shard_id = shard_id.into_inner();
+    if let Some(shard) = cluster.shard(shard_id) {
+        let mut downed_shards = downed_shards.shard_ids.write().await;
+        if downed_shards.contains(&shard_id) {
+            return HttpResponse::Conflict().body("Shard already down");
+        }
+
         match shard.shutdown_resumable() {
-            (_, Some(resume)) => HttpResponse::Ok().json(disconnect_to_dto(shard, resume)),
-            _ => HttpResponse::Conflict().body("Shard is not connected"),
+            (_, Some(resume)) => {
+                downed_shards.insert(shard_id);
+                HttpResponse::Ok().json(disconnect_to_dto(shard, resume))
+            }
+            // TODO: do we want to just force stop it anyways?
+            _ => HttpResponse::Conflict().body("Shard hasn't been started yet"),
         }
     } else {
         HttpResponse::NotFound().body("Shard not found")
@@ -173,18 +218,22 @@ async fn main() {
         ssl_acceptor
             .set_certificate_chain_file(&ssl_cert)
             .expect("Couldn't process certificate file");
+        let downed_shards = Arc::from(DownedShards::new());
 
-        let bind_result = HttpServer::new(closure!(clone cluster, clone manager, clone token, || {
-            App::new()
-                .wrap(shared::middleware::TokenAuth::new(&token))
-                .wrap(actix_web::middleware::Logger::default())
-                .app_data(Data::new(cluster.clone()))
-                .app_data(Data::new(manager.clone()))
-                .service(post_disconnect)
-                .service(get_status)
-                .service(get_shard_status)
-                .service(post_shard_disconnect)
-        }))
+        let bind_result = HttpServer::new(
+            closure!(clone cluster, clone manager, clone token, clone downed_shards, || {
+                App::new()
+                    .wrap(shared::middleware::TokenAuth::new(&token))
+                    .wrap(actix_web::middleware::Logger::default())
+                    .app_data(Data::new(cluster.clone()))
+                    .app_data(Data::new(manager.clone()))
+                    .app_data(Data::new(downed_shards.clone()))
+                    .service(post_disconnect)
+                    .service(get_status)
+                    .service(get_shard_status)
+                    .service(post_shard_disconnect)
+            }),
+        )
         .workers(1)
         .bind_openssl(&bind_url, ssl_acceptor);
 

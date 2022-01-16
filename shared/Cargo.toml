@@ -13,7 +13,7 @@ simple_logger = "1.11.0"
 
 [dependencies.actix-web]
 optional = true
-version = "4.0.0-beta.14"
+version = "4.0.0-beta.20"
 
 [dependencies.actix-utils]
 optional = true

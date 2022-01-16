@@ -14,12 +14,12 @@ closure = "0.3.0"
 futures-util = "0.3"
 log = "0.4"
 # tokio-zmq = "0.10.1"
-twilight-gateway = "0.8"
-twilight-model = "0.8"
+twilight-gateway = "0.8.3"
+twilight-model = "0.8.4"
 
 [dependencies.actix-web]
 features = ["openssl"]
-version = "4.0.0-beta.14"
+version = "4.0.0-beta.20"
 
 [dependencies.openssl]
 # features = ["vendored"]
@@ -38,7 +38,7 @@ path = "../shared"
 version = "0.3"  #  Obviously needs ZMQ to be installed
 
 [dependencies.tokio]
-features = ["macros", "rt-multi-thread"]
+features = ["macros", "rt-multi-thread", "sync"]
 version = "1.14"
 
 # [dependencies.zmq-sys]
