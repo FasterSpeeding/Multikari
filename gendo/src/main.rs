@@ -59,27 +59,31 @@ impl DownedShards {
 }
 
 
-fn shard_to_dto(shard: &twilight_gateway::Shard, is_alive: bool) -> dto::Shard {
+fn shard_to_dto(shard: &twilight_gateway::Shard, downed_shards: &HashSet<u64>) -> dto::Shard {
+    let is_alive;
     let latency;
-    let session_id;
     let seq;
+    let session_id;
+    let shard_id = shard.config().shard()[0];
     if let Ok(info) = shard.info() {
+        is_alive = !downed_shards.contains(&shard_id);
         latency = info.latency().recent().back().map(std::time::Duration::as_secs_f64);
         session_id = info.session_id().map(str::to_string);
         seq = Some(info.seq())
     } else {
+        is_alive = false;
         latency = None;
-        session_id = None;
         seq = None;
+        session_id = None;
     };
 
     dto::Shard {
         heartbeat_latency: latency,
         is_alive,
         // intents: config.intents().bits(),
-        session_id,
         seq,
-        shard_id: shard.config().shard()[0],
+        session_id,
+        shard_id,
     }
 }
 
@@ -88,8 +92,8 @@ fn disconnect_to_dto(shard: &twilight_gateway::Shard, resume: twilight_gateway::
         heartbeat_latency: None,
         is_alive: true,
         // intents: config.intents().bits(),
-        session_id: Some(resume.session_id),
         seq: Some(resume.sequence),
+        session_id: Some(resume.session_id),
         shard_id: shard.config().shard()[0],
     }
 }
@@ -102,7 +106,7 @@ async fn post_disconnect(cluster: Data<Arc<Cluster>>, downed_shards: Data<Arc<Do
         .down_resumable()
         .drain()
         // Don't bother with already disconnected shards!!!
-        .filter(|(shard_id, resume)| !downed_shards.contains(shard_id))
+        .filter(|(shard_id, _)| !downed_shards.contains(shard_id))
         .map(|(shard_id, resume)| disconnect_to_dto(cluster.shard(shard_id).unwrap(), resume))
         .collect::<Vec<_>>();
 
@@ -115,7 +119,7 @@ async fn get_status(cluster: Data<Arc<Cluster>>, downed_shards: Data<Arc<DownedS
     let downed_shards = downed_shards.shard_ids.read().await;
     let response = cluster
         .shards()
-        .map(|s| shard_to_dto(s, s.info().is_ok() && !downed_shards.contains(&s.config().shard()[0])))
+        .map(|s| shard_to_dto(s, &downed_shards))
         .collect::<Vec<_>>();
 
     HttpResponse::Ok().json(response)
@@ -127,14 +131,10 @@ async fn get_shard_status(
     shard_id: Path<u64>,
     downed_shards: Data<Arc<DownedShards>>,
 ) -> HttpResponse {
-    let shard_id = shard_id.into_inner();
-    if let Some(shard) = cluster.shard(shard_id) {
+    if let Some(shard) = cluster.shard(shard_id.into_inner()) {
         let downed_shards = downed_shards.shard_ids.read().await;
 
-        HttpResponse::Ok().json(shard_to_dto(
-            shard,
-            shard.info().is_ok() && !downed_shards.contains(&shard_id),
-        ))
+        HttpResponse::Ok().json(shard_to_dto(shard, &downed_shards))
     } else {
         HttpResponse::NotFound().body("Shard not found")
     }
