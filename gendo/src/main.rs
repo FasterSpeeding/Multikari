@@ -200,7 +200,6 @@ async fn main() {
     let ssl_cert = shared::get_env_variable("MANAGER_SSL_CERT");
     log::info!("Starting with SSL");
 
-
     let mut server: Option<HttpServer<_, _, _, _>> = None;
     for port in 4000..5000 {
         //  Allow the port to be specified for a specific instance.
