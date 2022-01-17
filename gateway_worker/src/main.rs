@@ -230,7 +230,6 @@ async fn main() -> std::io::Result<()> {
         .set_certificate_chain_file(&ssl_cert)
         .expect("Couldn't process certificate file");
 
-
     log::info!("Binding to address {}", url);
     server = server.bind_openssl(&url, ssl_acceptor)?;
 

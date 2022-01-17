@@ -80,13 +80,22 @@ class _CountingSeamphore:
             self._release_waiters()
 
     def _release_waiters(self) -> None:
-        for waiter in self._waiters:
-            waiter.set_result(None)
+        waiters = self._waiters.copy()
+        self._waiters = None
+        for waiter in waiters:
+            if not waiter.done():
+                waiter.set_result(None)
 
-    def wait_for_full_release(self) -> collections.Awaitable[None]:
+    async def wait_for_full_release(self) -> None:
         future = asyncio.get_running_loop().create_future()
         self._waiters.append(future)
-        return future
+        try:
+            return await future
+        except asyncio.CancelledError:
+            try:
+                self._waiters.remove(future)
+            except ValueError:
+                pass
 
 
 def _process_pipeline_message(message: tuple[zmq.Frame, ...], /) -> tuple[int, str, bytes]:
@@ -151,7 +160,7 @@ class ZmqReceiver(abc.AbstractReceiver):
         self._pull_socket.set_hwm(1)
         self._pull_socket.connect(self._pipeline_url)
         self._pull_task = loop.create_task(
-            self._dispatch_loop(self._pull_socket, dispatch_callback, _process_pipeline_message, self._rm_pull_task)
+            self._dispatch_loop(self._pull_socket, dispatch_callback, _process_pipeline_message, self._rm_sub_task)
         )
 
         self._sub_socket = self._ctx.socket(zmq.SUB)
