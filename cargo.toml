@@ -1,2 +1,2 @@
 [workspace]
-members = ["gendo", "shared", "shinji"]
+members = ["gateway_worker", "shared", "manager_service"]

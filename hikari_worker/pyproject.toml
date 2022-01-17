@@ -54,7 +54,7 @@ type_checking = ["pyright==0.0.13"]
 # zmq = ["pyzmq~=22.3"]
 
 [tool.flit.module]
-name = "rei"
+name = "multikari"
 
 [tool.black]
 line-length     = 120
