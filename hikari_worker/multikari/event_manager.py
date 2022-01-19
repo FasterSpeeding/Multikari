@@ -317,7 +317,7 @@ class _EventConverter:
 
 # TODO: catch errors
 class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove EventManagerBase all together.
-    __slots__ = ("__converter", "__listeners", "__receiver", "__streams", "__waiters")
+    __slots__ = ("__converter", "__listeners", "__load", "__receiver", "__streams", "__waiters")
 
     def __init__(
         self,
@@ -325,24 +325,25 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
         event_factory: hikari.api.EventFactory,
         intents: hikari.Intents,
         /,
+        load: collections.Callable[[bytes], dict[str, typing.Any]] = json.loads
     ) -> None:
         super().__init__(event_factory, intents)
         self.__converter = _EventConverter(event_factory)
         self.__listeners: dict[str, list[event_manager_api.CallbackT[typing.Any]]] = {}
+        self.__load = load
         self.__receiver = receiver
         self.__streams: dict[str, list[EventStream[typing.Any]]] = {}
         self.__waiters: dict[
             str, list[tuple[asyncio.Future[hikari.Event], typing.Optional[event_manager_api.PredicateT[typing.Any]]]]
         ] = {}
 
-    @staticmethod
-    def _unjsonify(data: bytes) -> dict[str, typing.Any]:
-        return json.loads(data)[_DATA_KEY]
+    def _load(self, data: bytes) -> dict[str, typing.Any]:
+        return self.__load(data)[_DATA_KEY]
 
     def consume_pipeline_event(self, event_name: str, shard: hikari.api.GatewayShard, data: bytes, /) -> None:
         if listeners := self.__listeners.get(event_name):
             if converter := self.__converter.get_converter(event_name):
-                event = converter(shard, self._unjsonify(data))
+                event = converter(shard, self._load(data))
                 asyncio.gather(*(self._invoke_callback(callback, event) for callback in listeners))
 
     def consume_subbed_event(self, event_name: str, shard: hikari.api.GatewayShard, data: bytes, /) -> None:
@@ -352,7 +353,7 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
 
         event: typing.Optional[hikari.Event] = None
         if streams := self.__streams.get(event_name):
-            event = converter(shard, self._unjsonify(data))
+            event = converter(shard, self._load(data))
 
             for stream in streams:
                 stream.on_event(event)
@@ -362,18 +363,19 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
             return
 
         if not event:
-            event = converter(shard, self._unjsonify(data))
+            event = converter(shard, self._load(data))
 
         for waiter in waiters:
             future, predicate = waiter
-            if not future.done():
-                try:
-                    if predicate and not predicate(event):
-                        continue
-                except Exception:
-                    future.set_exception(Exception)
-                else:
-                    future.set_result(event)
+            # TODO: do we need to check future.done here?
+            # if not future.done():
+            try:
+                if predicate and not predicate(event):
+                    continue
+            except Exception:
+                future.set_exception(Exception)
+            else:
+                future.set_result(event)
 
     def add_active_stream(self, stream: EventStream[event_manager_api.EventT], /) -> None:
         for name in _EVENT_TO_NAMES[stream.event_type]:

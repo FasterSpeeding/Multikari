@@ -80,8 +80,8 @@ class _CountingSeamphore:
             self._release_waiters()
 
     def _release_waiters(self) -> None:
-        waiters = self._waiters.copy()
-        self._waiters = None
+        waiters = self._waiters
+        self._waiters = []
         for waiter in waiters:
             if not waiter.done():
                 waiter.set_result(None)
