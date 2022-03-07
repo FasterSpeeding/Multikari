@@ -239,8 +239,7 @@ class _EventConverter:
             "READY": event_factory.deserialize_ready_event,
             "RESUMED": lambda s, _: event_factory.deserialize_resumed_event(s),
             "CHANNEL_CREATE": event_factory.deserialize_guild_channel_create_event,
-            #  TODO: make old_channel optional
-            "CHANNEL_UPDATE": lambda s, p: event_factory.deserialize_guild_channel_update_event(s, p, old_channel=None),
+            "CHANNEL_UPDATE": event_factory.deserialize_guild_channel_update_event,
             "CHANNEL_DELETE": event_factory.deserialize_guild_channel_delete_event,
             "CHANNEL_PINS_UPDATE": event_factory.deserialize_channel_pins_update_event,
             "GUILD_CREATE": lambda s, p: (
@@ -248,64 +247,41 @@ class _EventConverter:
                 if "unavailable" in p
                 else event_factory.deserialize_guild_join_event(s, p)
             ),
-            #  TODO: make old_guild optional
-            "GUILD_UPDATE": lambda s, p: event_factory.deserialize_guild_update_event(s, p, old_guild=None),
+            "GUILD_UPDATE": event_factory.deserialize_guild_update_event,
             "GUILD_DELETE": lambda s, p: (
                 event_factory.deserialize_guild_unavailable_event(s, p)
                 if p.get("unavailable", False)
-                # TODO: old_guild needs to be optional
-                else event_factory.deserialize_guild_leave_event(s, p, old_guild=None)
+                else event_factory.deserialize_guild_leave_event(s, p)
             ),
             "GUILD_BAN_ADD": event_factory.deserialize_guild_ban_add_event,
             "GUILD_BAN_REMOVE": event_factory.deserialize_guild_ban_remove_event,
-            # TODO: make old_emojis optional
-            "GUILD_EMOJIS_UPDATE": lambda s, p: event_factory.deserialize_guild_emojis_update_event(
-                s, p, old_emojis=None
-            ),
+            "GUILD_EMOJIS_UPDATE": event_factory.deserialize_guild_emojis_update_event,
             "GUILD_INTEGRATIONS_UPDATE": None,
             "INTEGRATION_CREATE": event_factory.deserialize_integration_create_event,
             "INTEGRATION_DELETE": event_factory.deserialize_integration_delete_event,
             "INTEGRATION_UPDATE": event_factory.deserialize_integration_update_event,
             "GUILD_MEMBER_ADD": event_factory.deserialize_guild_member_add_event,
-            # TODO: make old member optional
-            "GUILD_MEMBER_REMOVE": lambda s, p: event_factory.deserialize_guild_member_remove_event(
-                s, p, old_member=None
-            ),
-            # TODO: make old member optional
-            "GUILD_MEMBER_UPDATE": lambda s, p: event_factory.deserialize_guild_member_update_event(
-                s, p, old_member=None
-            ),
+            "GUILD_MEMBER_REMOVE": event_factory.deserialize_guild_member_remove_event,
+            "GUILD_MEMBER_UPDATE": event_factory.deserialize_guild_member_update_event,
             "GUILD_MEMBERS_CHUNK": event_factory.deserialize_guild_member_chunk_event,
-            # TODO: make old presence optional
-            "PRESENCE_UPDATE": lambda s, p: event_factory.deserialize_presence_update_event(s, p, old_presence=None),
+            "PRESENCE_UPDATE": event_factory.deserialize_presence_update_event,
             "GUILD_ROLE_CREATE": event_factory.deserialize_guild_role_create_event,
-            #  TODO: make old role optional
-            "GUILD_ROLE_UPDATE": lambda s, p: event_factory.deserialize_guild_role_update_event(s, p, old_role=None),
-            # TODO: make old role optional
-            "GUILD_ROLE_DELETE": lambda s, p: event_factory.deserialize_guild_role_delete_event(s, p, old_role=None),
+            "GUILD_ROLE_UPDATE": event_factory.deserialize_guild_role_update_event,
+            "GUILD_ROLE_DELETE": event_factory.deserialize_guild_role_delete_event,
             "INVITE_CREATE": event_factory.deserialize_invite_create_event,
-            # TODO: make old invite optional
-            "INVITE_DELETE": lambda s, p: event_factory.deserialize_invite_delete_event(s, p, old_invite=None),
+            "INVITE_DELETE": event_factory.deserialize_invite_delete_event,
             "MESSAGE_CREATE": event_factory.deserialize_message_create_event,
-            # TODO: make old message optional
-            "MESSAGE_UPDATE": lambda s, p: event_factory.deserialize_message_update_event(s, p, old_message=None),
-            # TODO: make old message optional
-            "MESSAGE_DELETE": lambda s, p: event_factory.deserialize_message_delete_event(s, p, old_message=None),
-            # TODO: make old messages optional
-            # TODO: old_messages should be optional like old_emojis
-            "MESSAGE_DELETE_BULK": lambda s, p: event_factory.deserialize_guild_message_delete_bulk_event(
-                s, p, old_messages={}
-            ),
+            "MESSAGE_UPDATE": event_factory.deserialize_message_update_event,
+            "MESSAGE_DELETE": event_factory.deserialize_message_delete_event,
+            "MESSAGE_DELETE_BULK": event_factory.deserialize_guild_message_delete_bulk_event,
             "MESSAGE_REACTION_ADD": event_factory.deserialize_message_reaction_add_event,
             "MESSAGE_REACTION_REMOVE": event_factory.deserialize_message_reaction_remove_event,
             "MESSAGE_REACTION_REMOVE_ALL": event_factory.deserialize_message_reaction_remove_all_event,
             # TODO: Remove dm events that'd never happen
             "MESSAGE_REACTION_REMOVE_EMOJI": event_factory.deserialize_message_reaction_remove_emoji_event,
             "TYPING_START": event_factory.deserialize_typing_start_event,
-            # TODO: old_user should be optional
-            "USER_UPDATE": lambda s, p: event_factory.deserialize_own_user_update_event(s, p, old_user=None),
-            # TODO: old voice state should be optional
-            "VOICE_STATE_UPDATE": lambda s, p: event_factory.deserialize_voice_state_update_event(s, p, old_state=None),
+            "USER_UPDATE": event_factory.deserialize_own_user_update_event,
+            "VOICE_STATE_UPDATE": event_factory.deserialize_voice_state_update_event,
             "VOICE_SERVER_UPDATE": event_factory.deserialize_voice_server_update_event,
             "WEBHOOKS_UPDATE": event_factory.deserialize_webhook_update_event,
             "INTERACTION_CREATE": event_factory.deserialize_interaction_create_event,

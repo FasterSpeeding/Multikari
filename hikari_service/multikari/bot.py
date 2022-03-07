@@ -297,14 +297,10 @@ class MQBot(
     def dispatch(self, event: hikari.Event) -> asyncio.Future[typing.Any]:
         return self._event_manager.dispatch(event)
 
-    def subscribe(
-        self, event_type: type[event_manager_api.EventT], callback: event_manager_api.CallbackT[typing.Any]
-    ) -> None:
+    def subscribe(self, event_type: type[typing.Any], callback: event_manager_api.CallbackT[typing.Any]) -> None:
         return self._event_manager.subscribe(event_type, callback)
 
-    def unsubscribe(
-        self, event_type: type[event_manager_api.EventT], callback: event_manager_api.CallbackT[typing.Any]
-    ) -> None:
+    def unsubscribe(self, event_type: type[typing.Any], callback: event_manager_api.CallbackT[typing.Any]) -> None:
         return self._event_manager.unsubscribe(event_type, callback)
 
     def get_listeners(

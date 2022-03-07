@@ -35,7 +35,8 @@
 import inspect
 
 import hikari.events
-from rei import event_manager
+
+from multikari import event_manager
 
 
 def test__event_to_names():
