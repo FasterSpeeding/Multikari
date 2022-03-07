@@ -36,7 +36,7 @@ pip-wheel-metadata/
 *.pyd
 
 # Tox/Nox-generated files
-.[nt]ox/
+**/.[nt]ox/
 
 # Coverage-generated files
 .coverage*
@@ -63,3 +63,5 @@ coverage.xml
 
 *.ssl/
 *.curve/
+
+site/

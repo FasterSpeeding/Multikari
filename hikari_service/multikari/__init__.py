@@ -29,23 +29,26 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
 # OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+"""A Discord gateway event distribution system with a Hikari interface."""
 from __future__ import annotations
 
-__all__: list[str] = [
-    # ./receivers
-    "receivers",
-    "ZmqReceiver",
-    # ./bot.py
-    "bot",
-    "MQBot",
-    # ./event_manager.py
-    "event_manager",
-    # ./shards.py
-    "shards",
-]
+__all__: list[str] = ["MQBot", "ZmqReceiver", "bot", "event_manager", "receivers", "shards"]
+
+import typing
 
 from . import event_manager
 from . import receivers
 from . import shards
 from .bot import MQBot
 from .receivers import ZmqReceiver
+
+__author__: typing.Final[str] = "Faster Speeding"
+__ci__: typing.Final[str] = "https://github.com/FasterSpeeding/multikari/actions"
+__copyright__: typing.Final[str] = "© 2020-2022 Faster Speeding"
+__coverage__: typing.Final[str] = "https://codeclimate.com/github/FasterSpeeding/multikari"
+__docs__: typing.Final[str] = "https://multikari.cursed.solutions/"
+__email__: typing.Final[str] = "lucina@lmbyrne.dev"
+__issue_tracker__: typing.Final[str] = "https://github.com/FasterSpeeding/multikari/issues"
+__license__: typing.Final[str] = "BSD"
+__url__: typing.Final[str] = "https://github.com/FasterSpeeding/multikari"
+__version__: typing.Final[str] = "0.1.0"

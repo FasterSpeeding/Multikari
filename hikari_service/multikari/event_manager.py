@@ -325,7 +325,7 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
         event_factory: hikari.api.EventFactory,
         intents: hikari.Intents,
         /,
-        load: collections.Callable[[bytes], dict[str, typing.Any]] = json.loads
+        load: collections.Callable[[bytes], dict[str, typing.Any]] = json.loads,
     ) -> None:
         super().__init__(event_factory, intents)
         self.__converter = _EventConverter(event_factory)

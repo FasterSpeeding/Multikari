@@ -2,7 +2,7 @@
 # cython: language_level=3
 # BSD 3-Clause License
 #
-# Copyright (c) 2020-2021, Faster Speeding
+# Copyright (c) 2020-2022, Faster Speeding
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -31,19 +31,32 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 from __future__ import annotations
 
+import itertools
 import pathlib
 import tempfile
+from collections import abc as collections
 
 import nox
 
-nox.options.sessions = ["reformat", "lint", "spell-check", "type-check", "test", "verify-types"]  # type: ignore
-GENERAL_TARGETS = ["./noxfile.py", "./rei", "./tests"]
-PYTHON_VERSIONS = ["3.9", "3.10"]  # TODO: @nox.session(python=["3.6", "3.7", "3.8"])?
+nox.options.sessions = ["reformat", "flake8", "slot-check", "type-check", "test", "verify-types"]  # type: ignore
+GENERAL_TARGETS = ["./multikari", "./noxfile.py", "./tests"]
 
 
-def install_requirements(session: nox.Session, *other_requirements: str) -> None:
-    session.install("--upgrade", "wheel")
-    session.install("--upgrade", *other_requirements)
+_DEV_DEP_DIR = pathlib.Path("./dev-requirements")
+
+
+def _dev_dep(*values: str) -> collections.Iterator[str]:
+    return itertools.chain.from_iterable(("-r", str(_DEV_DEP_DIR / f"{value}.txt")) for value in values)
+
+
+def install_requirements(session: nox.Session, *other_requirements: str, first_call: bool = True) -> None:
+    # --no-install --no-venv leads to it trying to install in the global venv
+    # as --no-install only skips "reused" venvs and global is not considered reused.
+    if not _try_find_option(session, "--skip-install", when_empty="True"):
+        if first_call:
+            session.install("--upgrade", "wheel")
+
+        session.install("--upgrade", *map(str, other_requirements))
 
 
 def _try_find_option(session: nox.Session, name: str, *other_names: str, when_empty: str | None = None) -> str | None:
@@ -55,48 +68,20 @@ def _try_find_option(session: nox.Session, name: str, *other_names: str, when_em
             return next(args_iter, when_empty)
 
 
-@nox.session(name="check-versions")
-def check_versions(session: nox.Session) -> None:
-    """Check that the version numbers declared for this project all match up."""
-    import httpx
-
-    # Note: this can be linked to a specific hash by adding it between raw and {file.name} as another route segment.
-    with httpx.Client() as client:
-        requirements = client.get(
-            "https://gist.githubusercontent.com/FasterSpeeding/139801789f00d15b4aa8ed2598fb524e/raw/requirements.json"
-        ).json()
-
-        # Note: this can be linked to a specific hash by adding it between raw and {file.name} as another route segment.
-        code = client.get(
-            "https://gist.githubusercontent.com/FasterSpeeding/139801789f00d15b4aa8ed2598fb524e/raw/check_versions.py"
-        ).read()
-
-    session.install(".", "--use-feature=in-tree-build")
-    session.install(*requirements)
-    # This is saved to a temporary file to avoid the source showing up in any of the output.
-
-    # A try, finally is used to delete the file rather than relying on delete=True behaviour
-    # as on Windows the file cannot be accessed by other processes if delete is True.
-    file = tempfile.NamedTemporaryFile(delete=False)
-    try:
-        with file:
-            file.write(code)
-
-        required_version = _try_find_option(session, "--required-version", "-r")
-        args = ["--required-version", required_version] if required_version else []
-        session.run("python", file.name, "-r", "rei", *args)
-
-    finally:
-        pathlib.Path(file.name).unlink(missing_ok=False)
-
-
 @nox.session(venv_backend="none")
 def cleanup(session: nox.Session) -> None:
     """Cleanup any temporary files made in this project by its nox tasks."""
     import shutil
 
     # Remove directories
-    for raw_path in ["./dist", "./docs", "./.nox", "./.pytest_cache", "./multikari_gendo.egg-info", "./coverage_html"]:
+    for raw_path in [
+        "./dist",
+        "./site",
+        "./.nox",
+        "./.pytest_cache",
+        "./multikari.egg-info",
+        "./coverage_html",
+    ]:
         path = pathlib.Path(raw_path)
         try:
             shutil.rmtree(str(path.absolute()))
@@ -120,82 +105,43 @@ def cleanup(session: nox.Session) -> None:
             session.log(f"[  OK  ] Removed '{raw_path}'")
 
 
-@nox.session(name="generate-docs", reuse_venv=True)
-def generate_docs(session: nox.Session) -> None:
-    """Generate docs for this project using Pdoc."""
-    install_requirements(session, ".[docs]", "--use-feature=in-tree-build")
-    session.log("Building docs into ./docs")
-    output_directory = _try_find_option(session, "-o", "--output") or "./docs"
-    session.run("pdoc", "--docformat", "numpy", "-o", output_directory, "./rei", "-t", "./templates")
-    session.log("Docs generated: %s", pathlib.Path("./docs/index.html").absolute())
+def _pip_compile(session: nox.Session, /, *args: str) -> None:
+    install_requirements(session, *_dev_dep("publish"))
+    for path in pathlib.Path("./dev-requirements/").glob("*.in"):
+        session.run(
+            "pip-compile",
+            str(path),
+            "--output-file",
+            str(path.with_name(path.name.removesuffix(".in") + ".txt")),
+            *args
+            # "--generate-hashes",
+        )
 
-    if not _try_find_option(session, "-j", "--json", when_empty="true"):
-        return
 
-    import httpx
+@nox.session(name="freeze-dev-deps", reuse_venv=True)
+def freeze_dev_deps(session: nox.Session) -> None:
+    """Freeze the dev dependencies."""
+    _pip_compile(session)
 
-    # Note: this can be linked to a specific hash by adding it between raw and {file.name} as another route segment.
-    code = httpx.get(
-        "https://gist.githubusercontent.com/FasterSpeeding/19a6d3f44cdd0a1f3b2437a8c5eef07a/raw/json_index_docs.py"
-    ).read()
 
-    # This is saved to a temporary file to avoid the source showing up in any of the output.
-
-    # A try, finally is used to delete the file rather than relying on delete=True behaviour
-    # as on Windows the file cannot be accessed by other processes if delete is True.
-    file = tempfile.NamedTemporaryFile(delete=False)
-    try:
-        with file:
-            file.write(code)
-
-        session.run("python", file.name, "rei", "-o", str(pathlib.Path(output_directory) / "search.json"))
-
-    finally:
-        pathlib.Path(file.name).unlink(missing_ok=False)
+@nox.session(name="upgrade-dev-deps", reuse_venv=True)
+def upgrade_dev_deps(session: nox.Session) -> None:
+    """Upgrade the dev dependencies."""
+    _pip_compile(session, "--upgrade")
 
 
 @nox.session(reuse_venv=True)
-def lint(session: nox.Session) -> None:
+def flake8(session: nox.Session) -> None:
     """Run this project's modules against the pre-defined flake8 linters."""
-    install_requirements(session, ".[flake8]", "--use-feature=in-tree-build")
+    install_requirements(session, *_dev_dep("flake8"))
     session.run("flake8", *GENERAL_TARGETS)
 
 
-@nox.session(reuse_venv=True, name="spell-check")
-def spell_check(session: nox.Session) -> None:
-    """Check this project's text-like files for common spelling mistakes."""
-    install_requirements(session, ".[lint]", "--use-feature=in-tree-build")  # include_standard_requirements=False
-    session.run(
-        "codespell",
-        *GENERAL_TARGETS,
-        ".flake8",
-        ".gitignore",
-        "LICENSE",
-        "pyproject.toml",
-        "CHANGELOG.md",
-        "CODE_OF_CONDUCT.md",
-        "CONTRIBUTING.md",
-        "README.md",
-        "./github",
-        "../gendo/src/",
-        "../gendo/.env.example",
-        "../gendo/Cargo.toml",
-        "../gendo/README.md",
-        "../shared/src/",
-        "../shared/Cargo.toml",
-        "../shinji/src/",
-        "../shinji/.env.example",
-        "../shinji/Cargo.toml",
-        "../shinji/README.md",
-        "../.codeclimate.yml",
-        "../.gitattributes",
-        "../.gitignore",
-        "../cargo.toml",
-        "../key_gen.py",
-        "../LICENSE",
-        "../README.md",
-        "../rustfmt.toml",
-    )
+@nox.session(reuse_venv=True, name="slot-check")
+def slot_check(session: nox.Session) -> None:
+    """Check this project's slotted classes for common mistakes."""
+    install_requirements(session, ".", "--use-feature=in-tree-build", *_dev_dep("lint"))
+    session.run("slotscheck", "-m", "multikari")
 
 
 @nox.session(reuse_venv=True)
@@ -209,10 +155,8 @@ def build(session: nox.Session) -> None:
 @nox.session(reuse_venv=True)
 def publish(session: nox.Session, test: bool = False) -> None:
     """Publish this project to pypi."""
-    if not _try_find_option(session, "--skip-version-check", when_empty="true"):
-        check_versions(session)
-
-    session.install("flit")
+    install_requirements(session, *_dev_dep("publish"))
+    install_requirements(session, ".", "--use-feature=in-tree-build", first_call=False)
 
     env: dict[str, str] = {}
 
@@ -244,26 +188,40 @@ def test_publish(session: nox.Session) -> None:
 @nox.session(reuse_venv=True)
 def reformat(session: nox.Session) -> None:
     """Reformat this project's modules to fit the standard style."""
-    install_requirements(session, ".[reformat]", "--use-feature=in-tree-build")  # include_standard_requirements=False
-    session.run("black", *GENERAL_TARGETS)
+    install_requirements(session, *_dev_dep("reformat"))  # include_standard_requirements=False
+    session.run("black", "--config", "./pyproject.toml", *GENERAL_TARGETS)
     session.run("isort", *GENERAL_TARGETS)
+    session.run(
+        "sort-all",
+        *map(str, pathlib.Path("multikari").glob("**/*.py")),
+        success_codes=[0, 1],
+    )
 
 
 @nox.session(reuse_venv=True)
 def test(session: nox.Session) -> None:
     """Run this project's tests using pytest."""
-    install_requirements(session, ".[tests]", "--use-feature=in-tree-build")
+    install_requirements(session, ".", "--use-feature=in-tree-build", *_dev_dep("tests"))
     # TODO: can import-mode be specified in the config.
-    session.run("pytest", "--import-mode", "importlib")
+    session.run("pytest", "-n", "auto", "--import-mode", "importlib")
 
 
 @nox.session(name="test-coverage", reuse_venv=True)
 def test_coverage(session: nox.Session) -> None:
     """Run this project's tests while recording test coverage."""
-    install_requirements(session, ".[tests]", "--use-feature=in-tree-build")
+    install_requirements(session, ".", "--use-feature=in-tree-build", *_dev_dep("tests"))
     # TODO: can import-mode be specified in the config.
     # https://github.com/nedbat/coveragepy/issues/1002
-    session.run("pytest", "--cov=rei", "--cov-report", "html:coverage_html", "--cov-report", "xml:coverage.xml")
+    session.run(
+        "pytest",
+        "-n",
+        "auto",
+        "--cov=multikari",
+        "--cov-report",
+        "html:coverage_html",
+        "--cov-report",
+        "xml:coverage.xml",
+    )
 
 
 def _run_pyright(session: nox.Session, *args: str) -> None:
@@ -281,16 +239,22 @@ def _run_pyright(session: nox.Session, *args: str) -> None:
 def type_check(session: nox.Session) -> None:
     """Statically analyse and veirfy this project using Pyright."""
     install_requirements(
-        session, ".[tests, type_checking]", "--use-feature=in-tree-build", "-r", "nox-requirements.txt"
+        session,
+        ".",
+        "--use-feature=in-tree-build",
+        *_dev_dep("nox", "tests", "type-checking"),
     )
     _run_pyright(session)
+    session.run("python", "-m", "mypy", "--version")
+    # Right now MyPy is allowed to fail without failing CI as the alternative is to let MyPy bugs block releases.
+    session.run("python", "-m", "mypy", "multikari", "--show-error-codes", success_codes=[0, 1])
 
 
 @nox.session(name="verify-types", reuse_venv=True)
 def verify_types(session: nox.Session) -> None:
     """Verify the "type completeness" of types exported by the library using Pyright."""
-    install_requirements(session, ".[type_checking]", "--use-feature=in-tree-build")
-    _run_pyright(session, "--verifytypes", "rei", "--ignoreexternal")
+    install_requirements(session, ".", "--use-feature=in-tree-build", *_dev_dep("type-checking"))
+    _run_pyright(session, "--verifytypes", "multikari", "--ignoreexternal")
 
 
 @nox.session(name="check-dependencies")
@@ -309,7 +273,7 @@ def check_dependencies(session: nox.Session) -> None:
             "https://gist.githubusercontent.com/FasterSpeeding/13e3d871f872fa09cf7bdc4144d62b2b/raw/check_dependency.py"
         ).read()
 
-    session.install(*requirements)
+    install_requirements(session, *requirements)
     # This is saved to a temporary file to avoid the source showing up in any of the output.
 
     # A try, finally is used to delete the file rather than relying on delete=True behaviour

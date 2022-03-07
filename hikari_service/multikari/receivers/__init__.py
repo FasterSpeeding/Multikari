@@ -31,13 +31,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 from __future__ import annotations
 
-__all__: list[str] = [
-    # ./abc
-    "abc",
-    # ./zmq
-    "zmq",
-    "ZmqReceiver",
-]
+__all__: list[str] = ["ZmqReceiver", "abc", "zmq"]
 
 from . import abc
 from . import zmq

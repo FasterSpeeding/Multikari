@@ -35,7 +35,6 @@
 import inspect
 
 import hikari.events
-
 from rei import event_manager
 
 
