@@ -364,7 +364,10 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
     def remove_active_stream(self, stream: EventStream[event_manager_api.EventT], /) -> None:
         for name in _EVENT_TO_NAMES[stream.event_type]:
             self.__streams[name].remove(stream)
-            self.__receiver.unsubscribe(name)
+            try:
+                self.__receiver.unsubscribe(name)
+            except KeyError:
+                pass
 
     def subscribe(
         self,
@@ -421,5 +424,8 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
 
         finally:
             for name in names:
-                self.__receiver.unsubscribe(name)
                 self.__waiters[name].remove(waiter)
+                try:
+                    self.__receiver.unsubscribe(name)
+                except KeyError:
+                    pass
