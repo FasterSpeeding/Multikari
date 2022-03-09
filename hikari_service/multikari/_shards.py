@@ -38,7 +38,7 @@ import typing
 
 import hikari
 
-from . import receivers
+from . import _receivers
 
 
 class Shard(hikari.api.GatewayShard):
@@ -47,7 +47,7 @@ class Shard(hikari.api.GatewayShard):
     def __init__(
         self,
         *,
-        receiver: receivers.abc.AbstractReceiver,
+        receiver: _receivers.abc.AbstractReceiver,
         shard_id: int,
         intents: hikari.Intents,
         shard_count: int,

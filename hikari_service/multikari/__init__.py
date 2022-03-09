@@ -32,15 +32,14 @@
 """A Discord gateway event distribution system with a Hikari interface."""
 from __future__ import annotations
 
-__all__: list[str] = ["MQBot", "ZmqReceiver", "bot", "event_manager", "receivers", "shards"]
+__all__: list[str] = ["AbstractReceiver", "EventManager", "MQBot", "ZmqReceiver"]
 
 import typing
 
-from . import event_manager
-from . import receivers
-from . import shards
-from .bot import MQBot
-from .receivers import ZmqReceiver
+from ._bot import MQBot
+from ._event_manager import EventManager
+from ._receivers import AbstractReceiver
+from ._receivers import ZmqReceiver
 
 __author__: typing.Final[str] = "Faster Speeding"
 __ci__: typing.Final[str] = "https://github.com/FasterSpeeding/multikari/actions"

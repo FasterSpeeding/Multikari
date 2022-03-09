@@ -31,8 +31,7 @@
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 from __future__ import annotations
 
-__all__: list[str] = ["ZmqReceiver", "abc", "zmq"]
+__all__: list[str] = ["AbstractReceiver", "ZmqReceiver"]
 
-from . import abc
-from . import zmq
+from .abc import AbstractReceiver
 from .zmq import ZmqReceiver

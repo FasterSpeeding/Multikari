@@ -36,7 +36,7 @@ import inspect
 
 import hikari.events
 
-from multikari import event_manager
+from multikari import _event_manager
 
 
 def test__event_to_names():
@@ -58,5 +58,5 @@ def test__event_to_names():
         }
     )
     # TODO: there's an event missing from an __all__ in hikari
-    difference = _found_events.symmetric_difference(event_manager._EVENT_TO_NAMES.keys())
+    difference = _found_events.symmetric_difference(_event_manager._EVENT_TO_NAMES.keys())
     assert not difference, f"Found {len(difference)} new events: {', '.join(map(repr, difference))}"

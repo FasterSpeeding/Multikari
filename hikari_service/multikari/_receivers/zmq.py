@@ -37,15 +37,14 @@ import asyncio
 import logging
 import typing
 
-import zmq
-import zmq.asyncio
-import zmq.auth
-
 from . import abc
 
 if typing.TYPE_CHECKING:
     import types
     from collections import abc as collections
+
+    import zmq
+    import zmq.asyncio
 
 _LOGGER = logging.getLogger("multikari")
 
@@ -133,9 +132,13 @@ class ZmqReceiver(abc.AbstractReceiver):
         "_sub_socket",
         "_sub_task",
         "_subscriptions",
+        "_zmq",
     )
 
     def __init__(self, pipeline_url: str, publish_url: str, /) -> None:
+        import zmq
+        import zmq.asyncio
+
         self._ctx = zmq.asyncio.Context()
         self._is_closing = False
         self._join_semaphore = _CountingSeamphore()
@@ -146,6 +149,7 @@ class ZmqReceiver(abc.AbstractReceiver):
         self._sub_socket: typing.Optional[zmq.asyncio.Socket] = None
         self._sub_task: typing.Optional[asyncio.Task[None]] = None
         self._subscriptions: dict[str, int] = {}
+        self._zmq = zmq
 
     @property
     def is_alive(self) -> bool:
@@ -156,19 +160,19 @@ class ZmqReceiver(abc.AbstractReceiver):
             raise RuntimeError("Already connected")
 
         loop = asyncio.get_running_loop()
-        self._pull_socket = self._ctx.socket(zmq.PULL)
+        self._pull_socket = self._ctx.socket(self._zmq.PULL)
         self._pull_socket.set_hwm(1)
         self._pull_socket.connect(self._pipeline_url)
         self._pull_task = loop.create_task(
             self._dispatch_loop(self._pull_socket, dispatch_callback, _process_pipeline_message, self._rm_sub_task)
         )
 
-        self._sub_socket = self._ctx.socket(zmq.SUB)
+        self._sub_socket = self._ctx.socket(self._zmq.SUB)
         # self._sub_socket.set_hwm(1)
         self._sub_socket.connect(self._publish_url)
 
         for event_name in self._subscriptions:
-            self._sub_socket.setsockopt_string(zmq.SUBSCRIBE, event_name)
+            self._sub_socket.setsockopt_string(self._zmq.SUBSCRIBE, event_name)
 
         self._sub_task = loop.create_task(
             self._dispatch_loop(self._sub_socket, sub_callback, _process_publish_message, self._rm_pull_task)
@@ -197,7 +201,7 @@ class ZmqReceiver(abc.AbstractReceiver):
             self._subscriptions[event_name] = 1
 
             if self._sub_socket:
-                self._sub_socket.setsockopt_string(zmq.SUBSCRIBE, event_name)
+                self._sub_socket.setsockopt_string(self._zmq.SUBSCRIBE, event_name)
 
     def unsubscribe(self, event_name: str, /) -> None:
         self._subscriptions[event_name] -= 1
@@ -205,7 +209,7 @@ class ZmqReceiver(abc.AbstractReceiver):
             del self._subscriptions[event_name]
 
             if self._sub_socket:
-                self._sub_socket.setsockopt_string(zmq.UNSUBSCRIBE, event_name)
+                self._sub_socket.setsockopt_string(self._zmq.UNSUBSCRIBE, event_name)
 
     async def _dispatch_loop(
         self,
@@ -219,9 +223,9 @@ class ZmqReceiver(abc.AbstractReceiver):
                 try:
                     message: tuple[zmq.Frame, ...] = await socket.recv_multipart(copy=False)
 
-                except zmq.ZMQError as exc:
+                except self._zmq.ZMQError as exc:
                     # Indicates the socket or its context was terminated.
-                    if exc.errno in (zmq.ETERM, zmq.ENOTSOCK):
+                    if exc.errno in (self._zmq.ETERM, self._zmq.ENOTSOCK):
                         _LOGGER.error("Socket closed with {}: {}", exc.errno, exc.strerror)
                         break
 
@@ -248,5 +252,8 @@ class ZmqReceiver(abc.AbstractReceiver):
 
 
 def _load_auth(socket: zmq.Socket) -> None:
+    import zmq
+    import zmq.auth
+
     socket.curve_publickey, socket.curve_secretkey = zmq.curve_keypair()
     socket.curve_serverkey, _ = zmq.auth.load_certificate(".curve/server.key")

@@ -43,9 +43,9 @@ import hikari.config
 import hikari.traits
 from hikari.impl import event_factory
 
-from . import event_manager
-from . import receivers
-from . import shards as shards_
+from . import _event_manager
+from . import _receivers
+from . import _shards as shards_
 
 if typing.TYPE_CHECKING:
     from collections import abc as collections
@@ -81,7 +81,7 @@ class MQBot(
 
     def __init__(
         self,
-        receiver: receivers.abc.AbstractReceiver,
+        receiver: _receivers.abc.AbstractReceiver,
         token: str,
         /,
         *,
@@ -107,7 +107,7 @@ class MQBot(
 
         self._entity_factory = hikari.impl.EntityFactoryImpl(self)
         self._event_factory = event_factory.EventFactoryImpl(self)
-        self._event_manager = event_manager.EventManager(self._receiver, self._event_factory, hikari.Intents.ALL)
+        self._event_manager = _event_manager.EventManager(self._receiver, self._event_factory, hikari.Intents.ALL)
         self._join_event: typing.Optional[asyncio.Event] = None
         self._rest = hikari.impl.RESTClientImpl(
             cache=None,

@@ -47,7 +47,7 @@ if typing.TYPE_CHECKING:
 
     import hikari
 
-    from . import receivers
+    from . import _receivers
 
     _EventStreamT = typing.TypeVar("_EventStreamT", bound="EventStream[typing.Any]")
     _ConverterSig = collections.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]
@@ -297,7 +297,7 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
 
     def __init__(
         self,
-        receiver: receivers.abc.AbstractReceiver,
+        receiver: _receivers.abc.AbstractReceiver,
         event_factory: hikari.api.EventFactory,
         intents: hikari.Intents,
         /,
