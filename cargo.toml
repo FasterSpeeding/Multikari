@@ -1,2 +1,2 @@
 [workspace]
-members = ["gateway_worker", "shared", "manager_service"]
+members = ["gateway_service", "shared", "manager_service"]

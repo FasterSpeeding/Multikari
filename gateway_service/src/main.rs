@@ -28,213 +28,274 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-use std::fmt;
-use std::result::Result;
+#![feature(async_closure)]
+use std::collections::HashSet;
+use std::io;
+use std::str::FromStr;
 use std::sync::Arc;
 
-use actix_web::error::InternalError;
-use actix_web::http::StatusCode;
-use actix_web::web::{Data, Json, Path};
+use actix_web::web::{Data, Path};
 use actix_web::{get, patch, post, App, HttpRequest, HttpResponse, HttpServer};
+use closure::closure;
+use futures_util::StreamExt;
 use openssl::ssl;
-use rand::Rng;
+use tokio::sync::RwLock;
+mod manager;
+mod senders;
+use senders::Sender;
 use shared::dto;
-mod orchestrator;
+use twilight_gateway::{Cluster, Intents};
 
-
-#[derive(Debug)]
-struct FailedRequest {
-    message: String,
-    status_code: u16,
+struct DownedShards {
+    pub shard_ids: RwLock<HashSet<u64>>,
 }
 
-impl FailedRequest {
-    fn new(message: &str, status_code: u16) -> Self {
+impl DownedShards {
+    fn new() -> Self {
         Self {
-            message: message.to_owned(),
-            status_code,
+            shard_ids: RwLock::new(HashSet::new()),
         }
     }
 }
 
-impl fmt::Display for FailedRequest {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(
-            f,
-            "Request failed with generic error: {} - {}",
-            self.status_code, self.message
-        )
-    }
-}
 
-impl std::error::Error for FailedRequest {
-}
-
-async fn get_gateway_bot(token: &str) -> Result<dto::GatewayBot, Box<dyn std::error::Error>> {
-    let client = reqwest::Client::new();
-    let mut attempts: u16 = 0;
-
-    loop {
-        let response = client
-            .get("https://discord.com/api/v9/gateway/bot")
-            .header(reqwest::header::AUTHORIZATION, format!("Bot {}", token))
-            .send()
-            .await?;
-
-        let status = response.status();
-        match status.as_u16() {
-            200..=299 => return response.json().await.map_err(Box::from),
-            429 | 500 | 502 | 503 | 504 => {
-                attempts += 1;
-                if attempts > 4 {
-                    return Err(Box::from(FailedRequest::new(
-                        "Too many failed attempts",
-                        status.as_u16(),
-                    )));
-                }
-                let retry_after = response
-                    .headers()
-                    .get(reqwest::header::RETRY_AFTER)
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(|v| v.parse::<f64>().ok())
-                    .unwrap_or_else(|| 2f64.powf(attempts.into()) + rand::thread_rng().gen_range(0.0..1.0));
-
-                log::warn!("{} - Retrying in {:.3} seconds", status, retry_after);
-                tokio::time::sleep(std::time::Duration::from_secs_f64(retry_after)).await;
-                continue;
-            }
-            _ => {
-                return Err(Box::from(FailedRequest::new(
-                    status.canonical_reason().unwrap_or("Unknown error"),
-                    status.as_u16(),
-                )));
-            }
-        }
-    }
-}
-
-#[get("/shards/{shard_id}")]
-async fn get_shard_by_id(
-    shard_id: Path<u64>,
-    orch: Data<Arc<dyn orchestrator::Orchestrator>>,
-) -> Result<HttpResponse, InternalError<&'static str>> {
-    orch.get_shard(shard_id.into_inner())
-        .await
-        .ok_or_else(|| InternalError::new("Shard not found", StatusCode::NOT_FOUND))
-        .map(|v| HttpResponse::Ok().json(v.to_dto()))
-}
-
-#[get("/shards")]
-async fn get_shards(
-    orch: Data<Arc<dyn orchestrator::Orchestrator>>,
-) -> Result<HttpResponse, InternalError<&'static str>> {
-    let shards: Vec<_> = orch.get_shards().await.iter().map(|v| v.to_dto()).collect();
-    Ok(HttpResponse::Ok().json(shards))
-}
-
-#[get("/shards/{shard_id}/presence")]
-async fn get_shard_presence(_req: HttpRequest) -> Result<HttpResponse, InternalError<&'static str>> {
-    Ok(HttpResponse::Ok().finish())
-}
-
-#[patch("/shards/{shard_id}/presence")]
-async fn patch_shard_presence(
-    shard_id: Path<u64>,
-    data: Json<dto::PresenceUpdate>,
-    orch: Data<Arc<dyn orchestrator::Orchestrator>>,
-) -> Result<HttpResponse, InternalError<&'static str>> {
-    // TODO: are these case-sensitive?
-    if !["online", "dnd", "idle", "invisible", "offline"].contains(&data.status.as_ref()) {
-        return Err(InternalError::new("Invalid presence status", StatusCode::BAD_REQUEST));
+fn shard_to_dto(shard: &twilight_gateway::Shard, downed_shards: &HashSet<u64>) -> dto::Shard {
+    let is_alive;
+    let latency;
+    let seq;
+    let session_id;
+    let shard_id = shard.config().shard()[0];
+    if let Ok(info) = shard.info() {
+        is_alive = !downed_shards.contains(&shard_id);
+        latency = info.latency().recent().back().map(std::time::Duration::as_secs_f64);
+        session_id = info.session_id().map(str::to_string);
+        seq = Some(info.seq())
+    } else {
+        is_alive = false;
+        latency = None;
+        seq = None;
+        session_id = None;
     };
 
-    // Since this was parsed from Json, we can assume it's valid Json.
-    let json = serde_json::value::to_value(&data.into_inner()).unwrap();
-    orch.send_to_shard(shard_id.into_inner(), json.to_string().as_bytes())
-        .await
-        .map_err(|e| e.to_response())
-        .map(|_| HttpResponse::NoContent().finish())
+    dto::Shard {
+        heartbeat_latency: latency,
+        is_alive,
+        // intents: config.intents().bits(),
+        seq,
+        session_id,
+        shard_id,
+    }
 }
 
-#[post("/guilds/{guild_id}/request-members")]
-async fn request_members(
-    guild_id: Path<u64>,
-    data: Json<dto::GuildRequestMembers>,
-    orch: Data<Arc<dyn orchestrator::Orchestrator>>,
-) -> Result<HttpResponse, InternalError<&'static str>> {
-    let guild_id = guild_id.into_inner();
-    let shard_id = orch.get_guild_shard(guild_id);
-
-    // Since this was parsed from Json, we can assume it's valid Json.
-    let mut json = serde_json::value::to_value(&data.into_inner()).unwrap();
-    json["guild_id"] = guild_id.into();
-
-    orch.send_to_shard(shard_id, json.to_string().as_bytes())
-        .await
-        .map_err(|e| e.to_response())
-        .map(|_| HttpResponse::Accepted().finish())
+fn disconnect_to_dto(shard: &twilight_gateway::Shard, resume: twilight_gateway::shard::ResumeSession) -> dto::Shard {
+    dto::Shard {
+        heartbeat_latency: None,
+        is_alive: true,
+        // intents: config.intents().bits(),
+        seq: Some(resume.sequence),
+        session_id: Some(resume.session_id),
+        shard_id: shard.config().shard()[0],
+    }
 }
 
-#[patch("/guilds/{guild_id}/voice-state")]
-async fn patch_guild_voice_state(
-    guild_id: Path<u64>,
-    data: Json<dto::VoiceStateUpdate>,
-    orch: Data<Arc<dyn orchestrator::Orchestrator>>,
-) -> Result<HttpResponse, InternalError<&'static str>> {
-    let guild_id = guild_id.into_inner();
-    let shard_id = orch.get_guild_shard(guild_id);
+#[post("/disconnect")]
+async fn post_disconnect(cluster: Data<Arc<Cluster>>, downed_shards: Data<Arc<DownedShards>>) -> HttpResponse {
+    let mut downed_shards = downed_shards.shard_ids.write().await;
 
-    // Since this was parsed from Json, we can assume it's valid Json.
-    let mut json = serde_json::value::to_value(&data.into_inner()).unwrap();
-    json["guild_id"] = guild_id.into();
+    let results = cluster
+        .down_resumable()
+        .drain()
+        // Don't bother with already disconnected shards!!!
+        .filter(|(shard_id, _)| !downed_shards.contains(shard_id))
+        .map(|(shard_id, resume)| disconnect_to_dto(cluster.shard(shard_id).unwrap(), resume))
+        .collect::<Vec<_>>();
 
-    orch.send_to_shard(shard_id, json.to_string().as_bytes())
-        .await
-        .map_err(|e| e.to_response())
-        .map(|_| HttpResponse::NoContent().finish())
+    downed_shards.extend(results.iter().map(|s| s.shard_id));
+    HttpResponse::Ok().json(results)
 }
 
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> std::io::Result<()> {
+#[get("/status")]
+async fn get_status(cluster: Data<Arc<Cluster>>, downed_shards: Data<Arc<DownedShards>>) -> HttpResponse {
+    let downed_shards = downed_shards.shard_ids.read().await;
+    let response = cluster
+        .shards()
+        .map(|s| shard_to_dto(s, &downed_shards))
+        .collect::<Vec<_>>();
+
+    HttpResponse::Ok().json(response)
+}
+
+#[get("/shards/{shard_id}/status")]
+async fn get_shard_status(
+    cluster: Data<Arc<Cluster>>,
+    shard_id: Path<u64>,
+    downed_shards: Data<Arc<DownedShards>>,
+) -> HttpResponse {
+    if let Some(shard) = cluster.shard(shard_id.into_inner()) {
+        let downed_shards = downed_shards.shard_ids.read().await;
+
+        HttpResponse::Ok().json(shard_to_dto(shard, &downed_shards))
+    } else {
+        HttpResponse::NotFound().body("Shard not found")
+    }
+}
+
+#[post("/shards/{shard_id}/disconnect")]
+async fn post_shard_disconnect(
+    cluster: Data<Arc<Cluster>>,
+    shard_id: Path<u64>,
+    downed_shards: Data<Arc<DownedShards>>,
+) -> HttpResponse {
+    let shard_id = shard_id.into_inner();
+    if let Some(shard) = cluster.shard(shard_id) {
+        let mut downed_shards = downed_shards.shard_ids.write().await;
+        if downed_shards.contains(&shard_id) {
+            return HttpResponse::Conflict().body("Shard already down");
+        }
+
+        match shard.shutdown_resumable() {
+            (_, Some(resume)) => {
+                downed_shards.insert(shard_id);
+                HttpResponse::Ok().json(disconnect_to_dto(shard, resume))
+            }
+            // TODO: do we want to just force stop it anyways?
+            _ => HttpResponse::Conflict().body("Shard hasn't been started yet"),
+        }
+    } else {
+        HttpResponse::NotFound().body("Shard not found")
+    }
+}
+
+#[tokio::main(flavor = "multi_thread")]
+async fn main() {
     shared::setup();
 
-    let url = shared::strip_url(shared::get_env_variable("MANAGER_URL"));
+    let manager_url = shared::unstrip_url(shared::get_env_variable("MANAGER_URL"));
+    let url = shared::strip_url(shared::get_env_variable("GATEWAY_WORKER_URL"));
+    let url_has_port = url.split_once(':').is_some();
     let token = shared::get_env_variable("DISCORD_TOKEN");
-    let gateway_bot = get_gateway_bot(&token).await.expect("Failed to fetch Gateway Bot info");
-    let shard_count = shared::try_get_env_variable("SHARD_COUNT")
-        .map(|v| v.parse().expect("Invalid SHARD_COUNT env variable"))
-        .unwrap_or(gateway_bot.shards);
+    let intents =
+        match shared::try_get_env_variable("DISCORD_INTENTS").map(|v| u64::from_str(&v).map(Intents::from_bits)) {
+            Some(Ok(Some(intents))) => intents,
+            None => Intents::all() & !(Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES),
+            _ => panic!("Invalid INTENTS value in env variables"),
+        };
 
-    let orch = Arc::from(orchestrator::ZmqOrchestrator::new(shard_count));
-    let mut server = HttpServer::new(move || {
-        App::new()
-            .app_data(Data::new(Arc::clone(&orch) as Arc<dyn orchestrator::Orchestrator>))
-            .wrap(shared::middleware::TokenAuth::new(&token))
-            .wrap(actix_web::middleware::Logger::default())
-            .service(get_shard_by_id)
-            .service(get_shards)
-            .service(request_members)
-            .service(patch_guild_voice_state)
-            .service(patch_shard_presence)
+    let manager = Arc::new(manager::Client::new(&manager_url, &token));
+    let sender = senders::zmq::ZmqSender::new().await;
+    let (cluster, events) = twilight_gateway::Cluster::builder(&token, intents)
+        .event_types(twilight_gateway::EventTypeFlags::SHARD_PAYLOAD)
+        .shard_scheme(twilight_gateway::cluster::scheme::ShardScheme::try_from((0..5, 5)).unwrap())
+        .build()
+        .await
+        .expect("Failed to make gateway connection");
+
+    let cluster = std::sync::Arc::new(cluster);
+    let start_cluster = cluster.clone();
+    tokio::spawn(async move {
+        start_cluster.up().await;
     });
 
     let ssl_key = shared::get_env_variable("MANAGER_SSL_KEY");
     let ssl_cert = shared::get_env_variable("MANAGER_SSL_CERT");
     log::info!("Starting with SSL");
-    let mut ssl_acceptor =
-        ssl::SslAcceptor::mozilla_intermediate(ssl::SslMethod::tls_server()).expect("Failed to creatte ssl acceptor");
-    ssl_acceptor
-        .set_private_key_file(&ssl_key, ssl::SslFiletype::PEM)
-        .expect("Couldn't process private key file");
-    ssl_acceptor
-        .set_certificate_chain_file(&ssl_cert)
-        .expect("Couldn't process certificate file");
 
-    log::info!("Binding to address {}", url);
-    server = server.bind_openssl(&url, ssl_acceptor)?;
+    let mut server = None;
+    for port in 4000..5000 {
+        //  Allow the port to be specified for a specific instance.
+        let bind_url = if url_has_port {
+            url.clone()
+        } else {
+            format!("{}:{}", url, port)
+        };
 
-    server
-        .workers(1) // This only needs 1 thread, any more would be excessive lol.
-        .run()
-        .await
+        let mut ssl_acceptor = ssl::SslAcceptor::mozilla_intermediate(ssl::SslMethod::tls_server())
+            .expect("Failed to creatte ssl acceptor");
+        ssl_acceptor
+            .set_private_key_file(&ssl_key, ssl::SslFiletype::PEM)
+            .expect("Couldn't process private key file");
+        ssl_acceptor
+            .set_certificate_chain_file(&ssl_cert)
+            .expect("Couldn't process certificate file");
+        let downed_shards = Arc::from(DownedShards::new());
+
+        let bind_result = HttpServer::new(
+            closure!(clone cluster, clone manager, clone token, clone downed_shards, || {
+                App::new()
+                    .wrap(shared::middleware::TokenAuth::new(&token))
+                    .wrap(actix_web::middleware::Logger::default())
+                    .app_data(Data::new(cluster.clone()))
+                    .app_data(Data::new(manager.clone()))
+                    .app_data(Data::new(downed_shards.clone()))
+                    .service(post_disconnect)
+                    .service(get_status)
+                    .service(get_shard_status)
+                    .service(post_shard_disconnect)
+            }),
+        )
+        .workers(1)
+        .bind_openssl(&bind_url, ssl_acceptor);
+
+        server = match bind_result.map_err(|v| v.kind()) {
+            Ok(server) => {
+                log::info!("Binding to address {}", bind_url);
+                Some(server)
+            }
+            Err(io::ErrorKind::AddrInUse) => {
+                if url_has_port {
+                    //  Allows the port to be specified for a specific instance.
+                    panic!("Couldn't bind address {}, it's already in use", url);
+                }
+                log::debug!("Skipping address {}, it's already in use", bind_url);
+                continue;
+            }
+            Err(error) => {
+                panic!("Failed to bind to address {}: {:?}", bind_url, error);
+            }
+        };
+        break;
+    }
+
+    if let Some(server) = server.map(|s| s.run()) {
+        let handle = server.handle();
+        futures_util::join!(
+            async {
+                // Todo: error handling?
+                server.await.expect("Failed to start server");
+                log::info!("Server stopped, closing gateway connection");
+                cluster.down_resumable();
+            },
+            async {
+                sender
+                    .consume_all(Box::new(Box::pin(events.filter_map(map_event))))
+                    .await;
+                log::info!("Gateway stopped, closing server");
+                handle.stop(true).await;
+            }
+        );
+    } else {
+        panic!("Failed to allocate any port on path {}", url)
+    };
+}
+
+async fn map_event((shard_id, event): (u64, twilight_gateway::Event)) -> Option<senders::Event> {
+    let event = match event {
+        twilight_gateway::Event::ShardPayload(payload) => payload,
+        _ => return None,
+    };
+    let payload = std::str::from_utf8(&event.bytes);
+
+    if payload.is_err() {
+        log::error!(
+            "Ignoring payload which failed to convert to utf8: {}",
+            payload.unwrap_err()
+        );
+        return None;
+    }
+    let payload = payload.unwrap();
+
+    twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(payload)
+        .map(|v| v.event_type_ref().map(|v| v.to_owned()))
+        .flatten()
+        .map(move |v| (shard_id, v, event.bytes))
 }

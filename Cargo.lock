@@ -604,20 +604,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "gateway_worker"
+name = "gateway_service"
 version = "0.1.0"
 dependencies = [
  "actix-web",
  "async-trait",
  "base64",
+ "closure",
  "futures-util",
  "log",
  "openssl",
- "rand",
  "reqwest",
- "serde_json",
  "shared",
+ "tmq",
  "tokio",
+ "twilight-gateway",
+ "twilight-model",
 ]
 
 [[package]]
@@ -907,16 +909,14 @@ dependencies = [
  "actix-web",
  "async-trait",
  "base64",
- "closure",
  "futures-util",
  "log",
  "openssl",
+ "rand",
  "reqwest",
+ "serde_json",
  "shared",
- "tmq",
  "tokio",
- "twilight-gateway",
- "twilight-model",
 ]
 
 [[package]]

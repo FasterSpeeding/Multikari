@@ -1,5 +1,5 @@
 [package]
-name = "gateway_worker"
+name = "gateway_service"
 version = "0.1.0"
 edition = "2021"
 authors = ["Faster Speeding <lucina@lmbyrne.dev>"]
@@ -8,11 +8,14 @@ authors = ["Faster Speeding <lucina@lmbyrne.dev>"]
 
 [dependencies]
 async-trait = "0.1"
-base64 = "0.13.0"
+# async_zmq = "0.3.2"
+base64 = "0.13"
+closure = "0.3.0"
 futures-util = "0.3"
 log = "0.4"
-rand = "0.8"
-serde_json = "1.0"
+# tokio-zmq = "0.10.1"
+twilight-gateway = "0.8.3"
+twilight-model = "0.8.4"
 
 [dependencies.actix-web]
 features = ["openssl"]
@@ -30,6 +33,18 @@ version = "0.11"
 features = ["dto", "middleware"]
 path = "../shared"
 
+[dependencies.tmq]
+# features = ["zmq-vendored"]
+version = "0.3"  #  Obviously needs ZMQ to be installed
+
 [dependencies.tokio]
-version     = "1.14"
-features    = ["macros", "rt", "sync", "time"]
+features = ["macros", "rt-multi-thread", "sync"]
+version = "1.14"
+
+# [dependencies.zmq-sys]
+# features = ["vendored"]
+# version = "0.11.0"
+
+# [features]
+# vendored-zmq = ['zmq/vendored']
+
