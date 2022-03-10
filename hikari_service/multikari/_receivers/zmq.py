@@ -49,10 +49,7 @@ if typing.TYPE_CHECKING:
 _LOGGER = logging.getLogger("multikari")
 
 
-# asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-
-class _CountingSeamphore:
+class _CountingSemaphore:
     __slots__ = ("_counter", "_limit", "_waiters")
 
     def __init__(self, limit: int = -1, /) -> None:
@@ -79,9 +76,7 @@ class _CountingSeamphore:
             self._release_waiters()
 
     def _release_waiters(self) -> None:
-        waiters = self._waiters
-        self._waiters = []
-        for waiter in waiters:
+        for waiter in self._waiters.copy():
             if not waiter.done():
                 waiter.set_result(None)
 
@@ -90,11 +85,8 @@ class _CountingSeamphore:
         self._waiters.append(future)
         try:
             return await future
-        except asyncio.CancelledError:
-            try:
-                self._waiters.remove(future)
-            except ValueError:
-                pass
+        finally:
+            self._waiters.remove(future)
 
 
 def _process_pipeline_message(message: tuple[zmq.Frame, ...], /) -> tuple[int, str, bytes]:
@@ -141,7 +133,7 @@ class ZmqReceiver(abc.AbstractReceiver):
 
         self._ctx = zmq.asyncio.Context()
         self._is_closing = False
-        self._join_semaphore = _CountingSeamphore()
+        self._join_semaphore = _CountingSemaphore()
         self._pipeline_url = pipeline_url
         self._publish_url = publish_url
         self._pull_socket: typing.Optional[zmq.asyncio.Socket] = None
