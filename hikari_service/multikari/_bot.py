@@ -36,6 +36,8 @@ __all__ = ["MQBot"]
 import asyncio
 import datetime
 import typing
+import logging
+import warnings
 from concurrent import futures
 
 import hikari
@@ -86,11 +88,21 @@ class MQBot(
         /,
         *,
         http_settings: typing.Optional[hikari.config.HTTPSettings] = None,
+        log_level: typing.Union[str, int, None] = logging.INFO,
         max_rate_limit: float = 300.0,
         max_retries: int = 3,
         proxy_settings: typing.Optional[hikari.config.ProxySettings] = None,
         discord_url: typing.Optional[str] = None,
     ) -> None:
+        if log_level is not None and not logging.root.handlers:
+            logging.basicConfig(
+                level=log_level,
+                format="%(levelname)-1.1s %(asctime)23.23s %(name)s: %(message)s",
+            )
+
+            warnings.simplefilter("default", DeprecationWarning)
+            logging.captureWarnings(True)
+
         # TODO: logging stuff?
         self._intents = hikari.Intents.NONE
         self._is_alive = False
