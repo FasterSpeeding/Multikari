@@ -105,8 +105,7 @@ where
         let auth = req
             .headers()
             .get(header::AUTHORIZATION)
-            .map(|v| v.to_str().ok())
-            .flatten()
+            .and_then(|v| v.to_str().ok())
             .map(|v| v.split_once(' '));
 
         let (token_type, auth) = match auth {

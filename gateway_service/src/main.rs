@@ -283,19 +283,15 @@ async fn map_event((shard_id, event): (u64, twilight_gateway::Event)) -> Option<
         twilight_gateway::Event::ShardPayload(payload) => payload,
         _ => return None,
     };
-    let payload = std::str::from_utf8(&event.bytes);
-
-    if payload.is_err() {
-        log::error!(
-            "Ignoring payload which failed to convert to utf8: {}",
-            payload.unwrap_err()
-        );
-        return None;
-    }
-    let payload = payload.unwrap();
+    let payload = match std::str::from_utf8(&event.bytes) {
+        Ok(value) => value,
+        Err(err) => {
+            log::error!("Ignoring payload which failed to convert to utf8: {}", err);
+            return None;
+        }
+    };
 
     twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(payload)
-        .map(|v| v.event_type_ref().map(|v| v.to_owned()))
-        .flatten()
+        .and_then(|v| v.event_type_ref().map(|v| v.to_owned()))
         .map(move |v| (shard_id, v, event.bytes))
 }
