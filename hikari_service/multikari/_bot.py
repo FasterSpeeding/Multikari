@@ -35,8 +35,8 @@ __all__ = ["MQBot"]
 
 import asyncio
 import datetime
-import typing
 import logging
+import typing
 import warnings
 from concurrent import futures
 
