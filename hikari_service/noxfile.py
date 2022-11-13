@@ -37,7 +37,7 @@ from collections import abc as collections
 
 import nox
 
-nox.options.sessions = ["reformat", "flake8", "slot-check", "type-check", "test", "verify-types"]  # type: ignore
+nox.options.sessions = ["reformat", "flake8", "slot-check", "type-check", "test", "verify-types"]
 GENERAL_TARGETS = ["./multikari", "./noxfile.py", "./tests"]
 
 
