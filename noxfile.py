@@ -38,7 +38,7 @@ from collections import abc as collections
 
 import nox
 
-nox.options.sessions = ["spell-check"]  # type: ignore
+nox.options.sessions = ["spell-check"]
 
 _DEV_DEP_DIR = pathlib.Path("./hikari_service/dev-requirements")
 
