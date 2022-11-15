@@ -10,7 +10,7 @@ license = {file = "LICENSE"}
 authors = [ {name = "Faster Speeding", email="lucina@lmbyrne.dev"} ]
 keywords = []
 classifiers = []
-dependencies = ["hikari~=2.0.0.dev107", "pyzmq~=22.3"]  # "python-dotenv~=0.19.2", 
+dependencies = ["hikari~=2.0.0.dev112", "pyzmq~=22.3"]  # "python-dotenv~=0.19.2", 
 dynamic = ["description", "version"]
 
 [project.urls]

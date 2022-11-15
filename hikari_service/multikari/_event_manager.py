@@ -37,15 +37,14 @@ import asyncio
 import json
 import typing
 
+import hikari
 import hikari.iterators
-from hikari.api import event_manager as event_manager_api
-from hikari.impl import event_manager_base
 
 if typing.TYPE_CHECKING:
     import types
     from collections import abc as collections
 
-    import hikari
+    from hikari.api import event_manager as event_manager_api
     from typing_extensions import Self
 
     from . import _receivers
@@ -53,9 +52,10 @@ if typing.TYPE_CHECKING:
     _ConverterSig = collections.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]
 
 _DATA_KEY = "d"
+_EventT = typing.TypeVar("_EventT", bound=hikari.Event)
 
 
-class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
+class EventStream(hikari.api.EventStream[_EventT]):
     __slots__ = (
         "_buffer",
         "_event_manager",
@@ -70,22 +70,22 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
     def __init__(
         self,
         event_manager: EventManager,
-        event_type: type[event_manager_api.EventT],
+        event_type: type[_EventT],
         *,
         timeout: typing.Union[float, int, None],
         limit: typing.Optional[int] = None,
     ) -> None:
-        self._buffer: list[event_manager_api.EventT] = []
+        self._buffer: list[_EventT] = []
         self._event_manager = event_manager
         self._event_type = event_type
-        self._filters: hikari.iterators.All[event_manager_api.EventT] = hikari.iterators.All(())
+        self._filters: hikari.iterators.All[_EventT] = hikari.iterators.All(())
         self._is_active = False
         self._limit = limit
         self._receive_event: typing.Optional[asyncio.Event] = None
         self._timeout = timeout
 
     @property
-    def event_type(self) -> type[event_manager_api.EventT]:
+    def event_type(self) -> type[_EventT]:
         return self._event_type
 
     def __enter__(self) -> Self:
@@ -101,7 +101,7 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
     ) -> None:
         self.close()
 
-    async def __anext__(self) -> event_manager_api.EventT:
+    async def __anext__(self) -> _EventT:
         if not self._is_active:
             raise RuntimeError("Stream is inactive")
 
@@ -118,16 +118,16 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
 
         return self._buffer.pop(0)
 
-    def __await__(self) -> collections.Generator[None, None, collections.Sequence[event_manager_api.EventT]]:
+    def __await__(self) -> collections.Generator[None, None, collections.Sequence[_EventT]]:
         return self._await_all().__await__()
 
-    async def _await_all(self) -> collections.Sequence[event_manager_api.EventT]:
+    async def _await_all(self) -> collections.Sequence[_EventT]:
         self.open()
         result = [event async for event in self]
         self.close()
         return result
 
-    def on_event(self, event: event_manager_api.EventT, /) -> None:
+    def on_event(self, event: _EventT, /) -> None:
         if not self._filters(event) or (self._limit is not None and len(self._buffer) >= self._limit):
             return
 
@@ -142,7 +142,7 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
 
     def filter(
         self,
-        *predicates: typing.Union[tuple[str, typing.Any], collections.Callable[[event_manager_api.EventT], bool]],
+        *predicates: typing.Union[tuple[str, typing.Any], collections.Callable[[_EventT], bool]],
         **attrs: typing.Any,
     ) -> Self:
         filter_ = self._map_predicates_and_attr_getters("filter", *predicates, **attrs)
@@ -158,7 +158,7 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
             self._is_active = True
 
 
-_EVENT_TO_NAMES: dict[type[hikari.Event], list[str]] = {
+_EVENT_TO_NAMES: dict[type[typing.Any], list[str]] = {
     hikari.GuildChannelCreateEvent: ["CHANNEL_CREATE"],
     hikari.GuildChannelUpdateEvent: ["CHANNEL_UPDATE"],
     hikari.GuildChannelDeleteEvent: ["CHANNEL_DELETE"],
@@ -201,6 +201,20 @@ _EVENT_TO_NAMES: dict[type[hikari.Event], list[str]] = {
     hikari.RoleCreateEvent: ["GUILD_ROLE_CREATE"],
     hikari.RoleUpdateEvent: ["GUILD_ROLE_UPDATE"],
     hikari.RoleDeleteEvent: ["GUILD_ROLE_DELETE"],
+    # TODO: this needs to be exported top-level
+    hikari.events.ApplicationCommandPermissionsUpdateEvent: ["APPLICATION_COMMAND_PERMISSIONS_UPDATE"],
+    hikari.ScheduledEventCreateEvent: ["GUILD_SCHEDULED_EVENT_CREATE"],
+    hikari.ScheduledEventDeleteEvent: ["GUILD_SCHEDULED_EVENT_DELETE"],
+    hikari.ScheduledEventUpdateEvent: ["GUILD_SCHEDULED_EVENT_UPDATE"],
+    hikari.ScheduledEventUserAddEvent: ["GUILD_SCHEDULED_EVENT_USER_ADD"],
+    hikari.ScheduledEventUserRemoveEvent: ["GUILD_SCHEDULED_EVENT_USER_REMOVE"],
+    hikari.StickersUpdateEvent: ["GUILD_STICKERS_UPDATE"],
+    hikari.GuildThreadCreateEvent: ["THREAD_CREATE"],
+    hikari.GuildThreadAccessEvent: ["THREAD_CREATE"],
+    hikari.GuildThreadUpdateEvent: ["THREAD_UPDATE"],
+    hikari.GuildThreadDeleteEvent: ["THREAD_DELETE"],
+    hikari.ThreadListSyncEvent: ["THREAD_LIST_SYNC"],
+    hikari.ThreadMembersUpdateEvent: ["THREAD_MEMBERS_UPDATE"],
     # TODO: shard and lifetime events???,
     hikari.ShardReadyEvent: ["READY"],
     hikari.ShardResumedEvent: ["RESUMED"],
@@ -238,6 +252,7 @@ class _EventConverter:
         self._name_to_converter: dict[str, typing.Optional[_ConverterSig]] = {
             "READY": event_factory.deserialize_ready_event,
             "RESUMED": lambda s, _: event_factory.deserialize_resumed_event(s),
+            "APPLICATION_COMMAND_PERMISSIONS_UPDATE": event_factory.deserialize_application_command_permission_update_event,
             "CHANNEL_CREATE": event_factory.deserialize_guild_channel_create_event,
             "CHANNEL_UPDATE": event_factory.deserialize_guild_channel_update_event,
             "CHANNEL_DELETE": event_factory.deserialize_guild_channel_delete_event,
@@ -268,6 +283,12 @@ class _EventConverter:
             "GUILD_ROLE_CREATE": event_factory.deserialize_guild_role_create_event,
             "GUILD_ROLE_UPDATE": event_factory.deserialize_guild_role_update_event,
             "GUILD_ROLE_DELETE": event_factory.deserialize_guild_role_delete_event,
+            "GUILD_SCHEDULED_EVENT_CREATE": event_factory.deserialize_scheduled_event_create_event,
+            "GUILD_SCHEDULED_EVENT_DELETE": event_factory.deserialize_scheduled_event_delete_event,
+            "GUILD_SCHEDULED_EVENT_UPDATE": event_factory.deserialize_scheduled_event_update_event,
+            "GUILD_SCHEDULED_EVENT_USER_ADD": event_factory.deserialize_scheduled_event_user_add_event,
+            "GUILD_SCHEDULED_EVENT_USER_REMOVE": event_factory.deserialize_scheduled_event_user_remove_event,
+            "GUILD_STICKERS_UPDATE": event_factory.deserialize_guild_stickers_update_event,
             "INVITE_CREATE": event_factory.deserialize_invite_create_event,
             "INVITE_DELETE": event_factory.deserialize_invite_delete_event,
             "MESSAGE_CREATE": event_factory.deserialize_message_create_event,
@@ -279,6 +300,15 @@ class _EventConverter:
             "MESSAGE_REACTION_REMOVE_ALL": event_factory.deserialize_message_reaction_remove_all_event,
             # TODO: Remove dm events that'd never happen
             "MESSAGE_REACTION_REMOVE_EMOJI": event_factory.deserialize_message_reaction_remove_emoji_event,
+            "THREAD_CREATE": lambda s, p: (
+                event_factory.deserialize_guild_thread_create_event(s, p)
+                if "newly_created" in p
+                else event_factory.deserialize_guild_thread_access_event(s, p)
+            ),
+            "THREAD_UPDATE": event_factory.deserialize_guild_thread_update_event,
+            "THREAD_DELETE": event_factory.deserialize_guild_thread_delete_event,
+            "THREAD_LIST_SYNC": event_factory.deserialize_thread_list_sync_event,
+            "THREAD_MEMBERS_UPDATE": event_factory.deserialize_thread_members_update_event,
             "TYPING_START": event_factory.deserialize_typing_start_event,
             "USER_UPDATE": event_factory.deserialize_own_user_update_event,
             "VOICE_STATE_UPDATE": event_factory.deserialize_voice_state_update_event,
@@ -292,7 +322,7 @@ class _EventConverter:
 
 
 # TODO: catch errors
-class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove EventManagerBase all together.
+class EventManager(hikari.impl.EventManagerBase):  # TODO: maybe remove EventManagerBase all together.
     __slots__ = ("__converter", "__listeners", "__load", "__receiver", "__streams", "__waiters")
 
     def __init__(
@@ -353,7 +383,7 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
             else:
                 future.set_result(event)
 
-    def add_active_stream(self, stream: EventStream[event_manager_api.EventT], /) -> None:
+    def add_active_stream(self, stream: EventStream[_EventT], /) -> None:
         for name in _EVENT_TO_NAMES[stream.event_type]:
             self.__receiver.subscribe(name)
             try:
@@ -361,7 +391,7 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
             except KeyError:
                 self.__streams[name] = [stream]
 
-    def remove_active_stream(self, stream: EventStream[event_manager_api.EventT], /) -> None:
+    def remove_active_stream(self, stream: EventStream[_EventT], /) -> None:
         for name in _EVENT_TO_NAMES[stream.event_type]:
             self.__streams[name].remove(stream)
             try:
@@ -371,8 +401,8 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
 
     def subscribe(
         self,
-        event_type: type[event_manager_api.EventT],
-        callback: event_manager_api.CallbackT[event_manager_api.EventT],
+        event_type: type[typing.Any],
+        callback: event_manager_api.CallbackT[typing.Any],
         *,
         _nested: int = 0,
     ) -> None:
@@ -385,8 +415,8 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
 
     def unsubscribe(
         self,
-        event_type: type[event_manager_api.EventT],
-        callback: event_manager_api.CallbackT[event_manager_api.EventT],
+        event_type: type[typing.Any],
+        callback: event_manager_api.CallbackT[typing.Any],
     ) -> None:
         super().unsubscribe(event_type, callback)
         for name in _EVENT_TO_NAMES[event_type]:
@@ -394,20 +424,20 @@ class EventManager(event_manager_base.EventManagerBase):  # TODO: maybe remove E
 
     def stream(
         self,
-        event_type: type[event_manager_api.EventT],
+        event_type: type[_EventT],
         /,
         timeout: typing.Union[float, int, None],
         limit: typing.Optional[int] = None,
-    ) -> event_manager_api.EventStream[event_manager_api.EventT]:
+    ) -> event_manager_api.EventStream[_EventT]:
         return EventStream(self, event_type, timeout=timeout, limit=limit)
 
     async def wait_for(
         self,
-        event_type: type[event_manager_api.EventT],
+        event_type: type[_EventT],
         /,
         timeout: typing.Union[float, int, None],
-        predicate: typing.Optional[event_manager_api.PredicateT[event_manager_api.EventT]] = None,
-    ) -> event_manager_api.EventT:
+        predicate: typing.Optional[event_manager_api.PredicateT[_EventT]] = None,
+    ) -> _EventT:
         future = asyncio.get_running_loop().create_future()
         names = _EVENT_TO_NAMES[event_type]
         waiter = (future, predicate)

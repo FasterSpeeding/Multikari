@@ -33,6 +33,7 @@
 # pyright: reportPrivateUsage=none
 
 import inspect
+import typing
 
 import hikari.events
 
@@ -40,7 +41,7 @@ from multikari import _event_manager
 
 
 def test__event_to_names():
-    _found_events = {
+    _found_events: set[typing.Any] = {
         attribute
         for _, attribute in inspect.getmembers(hikari.events)
         if isinstance(attribute, type) and issubclass(attribute, hikari.events.Event)

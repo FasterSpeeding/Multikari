@@ -41,9 +41,7 @@ import warnings
 from concurrent import futures
 
 import hikari
-import hikari.config
-import hikari.traits
-from hikari.impl import event_factory
+from hikari.impl import event_factory  # TODO: this needs to be exported top-level
 
 from . import _event_manager
 from . import _receivers
@@ -54,13 +52,15 @@ if typing.TYPE_CHECKING:
 
     from hikari.api import event_manager as event_manager_api
 
+    _EventT = typing.TypeVar("_EventT", bound=hikari.Event)
+
 
 class MQBot(
-    hikari.traits.RESTAware,
-    hikari.traits.Runnable,
-    hikari.traits.ShardAware,
-    hikari.traits.EventFactoryAware,
-    hikari.traits.EventManagerAware,
+    hikari.RESTAware,
+    hikari.Runnable,
+    hikari.ShardAware,
+    hikari.EventFactoryAware,
+    hikari.EventManagerAware,
     hikari.api.EventManager,
 ):
     __slots__ = (
@@ -87,11 +87,11 @@ class MQBot(
         token: str,
         /,
         *,
-        http_settings: typing.Optional[hikari.config.HTTPSettings] = None,
+        http_settings: typing.Optional[hikari.impl.HTTPSettings] = None,
         log_level: typing.Union[str, int, None] = logging.INFO,
         max_rate_limit: float = 300.0,
         max_retries: int = 3,
-        proxy_settings: typing.Optional[hikari.config.ProxySettings] = None,
+        proxy_settings: typing.Optional[hikari.impl.ProxySettings] = None,
         discord_url: typing.Optional[str] = None,
     ) -> None:
         if log_level is not None and not logging.root.handlers:
@@ -111,8 +111,8 @@ class MQBot(
         self._receiver = receiver
         self._shards: dict[int, shards_.Shard] = {}
 
-        self._http_settings = http_settings or hikari.config.HTTPSettings()
-        self._proxy_settings = proxy_settings or hikari.config.ProxySettings()
+        self._http_settings = http_settings or hikari.impl.HTTPSettings()
+        self._proxy_settings = proxy_settings or hikari.impl.ProxySettings()
         self._shard_count = -1
 
         self._executor: typing.Optional[futures.Executor] = None
@@ -151,7 +151,7 @@ class MQBot(
         return self._executor
 
     @property
-    def http_settings(self) -> hikari.config.HTTPSettings:
+    def http_settings(self) -> hikari.api.HTTPSettings:
         return self._http_settings
 
     @property
@@ -159,7 +159,7 @@ class MQBot(
         return self._intents
 
     @property
-    def proxy_settings(self) -> hikari.config.ProxySettings:
+    def proxy_settings(self) -> hikari.api.ProxySettings:
         return self._proxy_settings
 
     @property
@@ -302,7 +302,7 @@ class MQBot(
     # hikari.api.EventManager
 
     def consume_raw_event(
-        self, event_name: str, shard: hikari.api.GatewayShard, payload: dict[str, typing.Any]
+        self, event_name: str, shard: hikari.api.GatewayShard, payload: collections.Mapping[str, typing.Any]
     ) -> None:
         return self._event_manager.consume_raw_event(event_name, shard, payload)
 
@@ -317,36 +317,33 @@ class MQBot(
 
     def get_listeners(
         self,
-        event_type: type[event_manager_api.EventT],
+        event_type: type[_EventT],
         /,
         *,
         polymorphic: bool = True,
-    ) -> collections.Collection[event_manager_api.CallbackT[event_manager_api.EventT]]:
+    ) -> collections.Collection[event_manager_api.CallbackT[_EventT]]:
         return self._event_manager.get_listeners(event_type, polymorphic=polymorphic)
 
     def listen(
         self,
-        event_type: typing.Optional[type[event_manager_api.EventT]] = None,
-    ) -> collections.Callable[
-        [event_manager_api.CallbackT[event_manager_api.EventT]],
-        event_manager_api.CallbackT[event_manager_api.EventT],
-    ]:
-        return self._event_manager.listen(event_type)
+        *event_types: typing.Type[_EventT],
+    ) -> collections.Callable[[event_manager_api.CallbackT[_EventT]], event_manager_api.CallbackT[_EventT],]:
+        return self._event_manager.listen(*event_types)
 
     def stream(
         self,
-        event_type: type[event_manager_api.EventT],
+        event_type: type[_EventT],
         /,
         timeout: typing.Union[float, int, None],
         limit: typing.Optional[int] = None,
-    ) -> event_manager_api.EventStream[event_manager_api.EventT]:
+    ) -> event_manager_api.EventStream[_EventT]:
         return self._event_manager.stream(event_type, timeout=timeout, limit=limit)
 
     def wait_for(
         self,
-        event_type: type[event_manager_api.EventT],
+        event_type: type[_EventT],
         /,
         timeout: typing.Union[float, int, None],
-        predicate: typing.Optional[event_manager_api.PredicateT[event_manager_api.EventT]] = None,
-    ) -> collections.Coroutine[typing.Any, typing.Any, event_manager_api.EventT]:
+        predicate: typing.Optional[event_manager_api.PredicateT[_EventT]] = None,
+    ) -> collections.Coroutine[typing.Any, typing.Any, _EventT]:
         return self._event_manager.wait_for(event_type, timeout=timeout, predicate=predicate)

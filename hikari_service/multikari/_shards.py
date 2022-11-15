@@ -62,6 +62,10 @@ class Shard(hikari.api.GatewayShard):
         self._shard_count = shard_count
 
     @property
+    def is_connected(self) -> bool:
+        return self._receiver.is_alive
+
+    @property
     def heartbeat_latency(self) -> float:
         return self._heartbeat_latency
 
@@ -81,7 +85,7 @@ class Shard(hikari.api.GatewayShard):
     def shard_count(self) -> int:
         return self._shard_count
 
-    async def get_user_id(self) -> hikari.Snowflake:
+    def get_user_id(self) -> hikari.Snowflake:
         return self._current_user_id
 
     async def close(self) -> None:
