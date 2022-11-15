@@ -34,8 +34,6 @@ from __future__ import annotations
 
 __all__: list[str] = ["AbstractReceiver", "EventManager", "MQBot", "ZmqReceiver"]
 
-import typing
-
 from ._bot import MQBot
 from ._event_manager import EventManager
 from ._receivers import AbstractReceiver
