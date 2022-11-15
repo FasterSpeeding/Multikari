@@ -96,16 +96,6 @@ def cleanup(session: nox.Session) -> None:
             session.log(f"[  OK  ] Removed '{raw_path}'")
 
 
-@nox.session(name="generate-docs", reuse_venv=True)
-def generate_docs(session: nox.Session) -> None:
-    """Generate docs for this project using Mkdoc."""
-    install_requirements(session, *_dev_dep("docs"))
-    output_directory = _try_find_option(session, "-o", "--output") or "./site"
-    session.run("mkdocs", "build", "-d", output_directory)
-    for path in ("./CHANGELOG.md", "./README.md"):
-        shutil.copy(path, pathlib.Path(output_directory) / path)
-
-
 @nox.session(reuse_venv=True, name="spell-check")
 def spell_check(session: nox.Session) -> None:
     """Check this project's text-like files for common spelling mistakes."""
