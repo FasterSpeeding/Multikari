@@ -4,6 +4,7 @@ build-backend = "flit_core.buildapi"
 
 [project]
 name = "multikari"
+version = "0.1.0"
 readme = "README.md"
 requires-python = ">=3.9.0,<3.12"
 license = {file = "LICENSE"}
@@ -11,13 +12,12 @@ authors = [ {name = "Faster Speeding", email="lucina@lmbyrne.dev"} ]
 keywords = []
 classifiers = []
 dependencies = ["hikari~=2.0.0.dev112", "pyzmq~=22.3"]  # "python-dotenv~=0.19.2", 
-dynamic = ["description", "version"]
+dynamic = ["description"]
 
 [project.urls]
-homepage = "https://github.com/FasterSpeeding/multikari"
-repository = "https://github.com/FasterSpeeding/multikari"
-documentation = "https://multikari.cursed.solutions/"
-changelog = "https://github.com/FasterSpeeding/multikari/blob/master/CHANGELOG.md"
+Homepage = "https://github.com/FasterSpeeding/multikari"
+Repository = "https://github.com/FasterSpeeding/multikari"
+Documentation = "https://github.com/FasterSpeeding/Sake/blob/master/README.md"
 
 [tool.black]
 line-length     = 120

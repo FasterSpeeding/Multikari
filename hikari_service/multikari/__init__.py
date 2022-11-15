@@ -40,14 +40,3 @@ from ._bot import MQBot
 from ._event_manager import EventManager
 from ._receivers import AbstractReceiver
 from ._receivers import ZmqReceiver
-
-__author__: typing.Final[str] = "Faster Speeding"
-__ci__: typing.Final[str] = "https://github.com/FasterSpeeding/multikari/actions"
-__copyright__: typing.Final[str] = "© 2020-2022 Faster Speeding"
-__coverage__: typing.Final[str] = "https://codeclimate.com/github/FasterSpeeding/multikari"
-__docs__: typing.Final[str] = "https://multikari.cursed.solutions/"
-__email__: typing.Final[str] = "lucina@lmbyrne.dev"
-__issue_tracker__: typing.Final[str] = "https://github.com/FasterSpeeding/multikari/issues"
-__license__: typing.Final[str] = "BSD"
-__url__: typing.Final[str] = "https://github.com/FasterSpeeding/multikari"
-__version__: typing.Final[str] = "0.1.0"
