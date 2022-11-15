@@ -4,13 +4,13 @@
 #
 #    pip-compile --output-file='dev-requirements\tests.txt' 'dev-requirements\tests.in'
 #
-atomicwrites==1.4.0
+atomicwrites==1.4.1
     # via pytest
-attrs==21.4.0
+attrs==22.1.0
     # via pytest
-colorama==0.4.4
+colorama==0.4.6
     # via pytest
-coverage[toml]==6.3.2
+coverage[toml]==6.5.0
     # via pytest-cov
 execnet==1.9.0
     # via pytest-xdist
@@ -24,7 +24,7 @@ py==1.11.0
     # via
     #   pytest
     #   pytest-forked
-pyparsing==3.0.7
+pyparsing==3.0.9
     # via packaging
 pytest==7.0.1
     # via
