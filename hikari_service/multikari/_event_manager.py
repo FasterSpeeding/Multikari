@@ -46,10 +46,10 @@ if typing.TYPE_CHECKING:
     from collections import abc as collections
 
     import hikari
+    from typing_extensions import Self
 
     from . import _receivers
 
-    _EventStreamT = typing.TypeVar("_EventStreamT", bound="EventStream[typing.Any]")
     _ConverterSig = collections.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]
 
 _DATA_KEY = "d"
@@ -88,7 +88,7 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
     def event_type(self) -> type[event_manager_api.EventT]:
         return self._event_type
 
-    def __enter__(self: _EventStreamT) -> _EventStreamT:
+    def __enter__(self) -> Self:
         self.open()
         return self
 
@@ -141,10 +141,10 @@ class EventStream(event_manager_api.EventStream[event_manager_api.EventT]):
             self._is_active = False
 
     def filter(
-        self: _EventStreamT,
+        self,
         *predicates: typing.Union[tuple[str, typing.Any], collections.Callable[[event_manager_api.EventT], bool]],
         **attrs: typing.Any,
-    ) -> _EventStreamT:
+    ) -> Self:
         filter_ = self._map_predicates_and_attr_getters("filter", *predicates, **attrs)
         if self._is_active:
             self._buffer = [entry for entry in self._buffer if filter_(entry)]

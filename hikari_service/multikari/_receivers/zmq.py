@@ -170,10 +170,10 @@ class ZmqReceiver(abc.AbstractReceiver):
             self._dispatch_loop(self._sub_socket, sub_callback, _process_publish_message, self._rm_pull_task)
         )
 
-    def _rm_pull_task(self):
+    def _rm_pull_task(self) -> None:
         self._pull_task = None
 
-    def _rm_sub_task(self):
+    def _rm_sub_task(self) -> None:
         self._sub_task = None
 
     async def disconnect(self) -> None:
