@@ -309,6 +309,7 @@ class _EventConverter:
             "THREAD_DELETE": event_factory.deserialize_guild_thread_delete_event,
             "THREAD_LIST_SYNC": event_factory.deserialize_thread_list_sync_event,
             "THREAD_MEMBERS_UPDATE": event_factory.deserialize_thread_members_update_event,
+            "THREAD_MEMBER_UPDATE": None,
             "TYPING_START": event_factory.deserialize_typing_start_event,
             "USER_UPDATE": event_factory.deserialize_own_user_update_event,
             "VOICE_STATE_UPDATE": event_factory.deserialize_voice_state_update_event,
