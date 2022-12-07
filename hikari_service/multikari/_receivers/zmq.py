@@ -67,7 +67,7 @@ class _CountingSemaphore:
 
         self._counter += 1
 
-    def __exit__(self, _: type[Exception], __: Exception, ___: types.TracebackType, /) -> None:
+    def __exit__(self, _: type[BaseException], __: BaseException, ___: types.TracebackType, /) -> None:
         if self._counter == 0:
             raise RuntimeError("Semaphore is not acquired")
 
