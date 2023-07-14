@@ -30,7 +30,7 @@ use core::panic;
 use std::str::FromStr;
 
 use futures::channel::mpsc;
-use futures_util::StreamExt;
+use futures::StreamExt;
 use twilight_model::gateway::payload::outgoing::{request_guild_members, update_presence, update_voice_state};
 use twilight_model::gateway::presence::{Activity, ActivityType, Status};
 use twilight_model::gateway::OpCode;
@@ -85,7 +85,7 @@ async fn main() {
         .expect("Filed to connect to orchestrator");
 
     // TODO: TLS
-    // if 
+    // if
 
     let client = orchestrator_client::OrchestratorClient::new(channel);
     let mut joins: Vec<tokio::task::JoinHandle<()>> = Vec::new();

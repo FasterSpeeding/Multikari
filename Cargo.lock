@@ -187,9 +187,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "cmake"
-version = "0.1.48"
+version = "0.1.50"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e8ad8cef104ac57b68b89df3208164d228503abbdce70f6880ffa3d970e7443a"
+checksum = "a31c789563b815f77f4250caee12365734369f942439b7defd71e18a48197130"
 dependencies = [
  "cc",
 ]
@@ -428,7 +428,6 @@ dependencies = [
  "async-trait",
  "dotenv",
  "futures",
- "futures-util",
  "log",
  "prost",
  "prost-types",
@@ -1342,9 +1341,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tmq"
-version = "0.3.0"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "48fc0820216dbcbc4af5fceb12dc08a99bf93174198afe0bf989d5440a5c6cb8"
+checksum = "2e83994e39464b6dd4b3d3e1596744d6c1d56b6687fa4aa099c4994c31835763"
 dependencies = [
  "futures",
  "log",

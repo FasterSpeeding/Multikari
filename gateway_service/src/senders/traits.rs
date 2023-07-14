@@ -29,7 +29,7 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 use async_trait::async_trait;
-use futures_util::Stream;
+use futures::Stream;
 
 pub type Event = (u64, String, String);
 pub type EventStream = dyn Stream<Item = Event> + Send + Unpin;
