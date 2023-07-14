@@ -7,39 +7,35 @@ authors = ["Faster Speeding <lucina@lmbyrne.dev>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+async-stream="0.3"
 async-trait = "0.1"
 # async_zmq = "0.3.2"
-base64 = "0.13"
-closure = "0.3.0"
-futures-util = "0.3"
+dotenv = "0.15.0"
+futures = "0.3.28"  # 3.19
+futures-util = "0.3.28"  # 3.19
 log = "0.4"
+prost = "0.11.9"
+prost-types = "0.11.9"
+simple_logger = "4.2.0"
 # tokio-zmq = "0.10.1"
-twilight-gateway = "0.8.3"
-twilight-model = "0.8.4"
+twilight-gateway = "0.15"
+twilight-model = "0.15"
 
-[dependencies.actix-web]
-features = ["openssl"]
-version = "4.0.0-beta.20"
+# [dependencies.openssl]
+# # features = ["vendored"]
+# version = "0.10"  # Needs libssl-dev
 
-[dependencies.openssl]
-# features = ["vendored"]
-version = "0.10"  # Needs libssl-dev
-
-[dependencies.reqwest]
-features = ["json"]
-version = "0.11"
-
-[dependencies.shared]
-features = ["dto", "middleware"]
-path = "../shared"
+[dependencies.tonic]
+features = ["channel", "default"]
+version = "0.9.2"
 
 [dependencies.tmq]
-# features = ["zmq-vendored"]
+features = ["zmq-vendored"]
 version = "0.3"  #  Obviously needs ZMQ to be installed
 
 [dependencies.tokio]
-features = ["macros", "rt-multi-thread", "sync"]
-version = "1.14"
+features = ["macros", "rt-multi-thread"]
+version = "1.29.1"
 
 # [dependencies.zmq-sys]
 # features = ["vendored"]
@@ -48,3 +44,5 @@ version = "1.14"
 # [features]
 # vendored-zmq = ['zmq/vendored']
 
+[build-dependencies]
+tonic-build = "0.9.2"
