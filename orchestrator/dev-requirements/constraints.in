@@ -1,3 +1,0 @@
-grpcio>=1, <2
-grpcio-tools>=1, <2
-hikari>=2.0.0.dev116, <3
