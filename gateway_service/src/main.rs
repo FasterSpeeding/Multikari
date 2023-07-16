@@ -180,7 +180,12 @@ async fn handle_events(mut shard: twilight_gateway::Shard, sender: senders::zmq:
 }
 
 async fn handle_instructions(mut stream: tonic::Streaming<Instruction>, sender: twilight_gateway::MessageSender) {
-    let mut presence = update_presence::UpdatePresencePayload::new(vec![], false, None, Status::Online).unwrap();
+    let mut presence = update_presence::UpdatePresencePayload {
+        activities: vec![],
+        afk: false,
+        since: None,
+        status: Status::Online,
+    };
 
     loop {
         let instruction = match stream.next().await {

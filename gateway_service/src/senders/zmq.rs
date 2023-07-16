@@ -91,12 +91,12 @@ impl Sender for ZmqSender {
             let topic = format!("{}:{}", event_name, shard_id);
             // TODO: should we also try the other before returning either error?
             // TODO: handle pin better
-            publish_socket
-                .start_send_unpin(vec![topic.as_bytes(), payload.as_bytes()])
-                .unwrap();
-            push_socket
-                .start_send_unpin(vec![shard_id.as_bytes(), event_name.as_bytes(), payload.as_bytes()])
-                .unwrap();
+            let (result_1, result_2) = tokio::join!(
+                publish_socket.feed(vec![topic.as_bytes(), payload.as_bytes()]),
+                push_socket.feed(vec![shard_id.as_bytes(), event_name.as_bytes(), payload.as_bytes()])
+            );
+            result_1.unwrap();
+            result_2.unwrap();
         }
     }
 }

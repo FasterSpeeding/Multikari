@@ -249,7 +249,7 @@ class ZmqReceiver(abc.AbstractReceiver):
             await self._join_semaphore.wait_for_full_release()
 
 
-def _load_auth(socket: zmq.Socket) -> None:
+def _load_auth(socket: zmq.Socket[bytes]) -> None:
     import zmq
     import zmq.auth
 
