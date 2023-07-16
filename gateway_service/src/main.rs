@@ -208,8 +208,8 @@ async fn handle_instructions(mut stream: tonic::Streaming<Instruction>, sender: 
 
         match instruction.payload {
             Some(instruction::Payload::PresenceUpdate(payload)) => {
-                match payload.idle_sine {
-                    Some(presence_update::IdleSine::IdleTimestamp(timestamp)) => {
+                match payload.idle_since {
+                    Some(presence_update::IdleSince::IdleTimestamp(timestamp)) => {
                         presence.since = Some(timestamp.seconds as u64)
                     }
                     None => presence.since = None,
