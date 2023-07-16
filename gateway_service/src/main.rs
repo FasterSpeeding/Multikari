@@ -1,4 +1,3 @@
-use core::panic;
 // BSD 3-Clause License
 //
 // Copyright (c) 2021-2023, Lucina
@@ -7,14 +6,16 @@ use core::panic;
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
 //
-// * Redistributions of source code must retain the above copyright notice, this list of conditions and the
-//   following disclaimer.
+// * Redistributions of source code must retain the above copyright notice, this
+//   list of conditions and the following disclaimer.
 //
-// * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the
-//   following disclaimer in the documentation and/or other materials provided with the distribution.
+// * Redistributions in binary form must reproduce the above copyright notice,
+//   this list of conditions and the following disclaimer in the documentation
+//   and/or other materials provided with the distribution.
 //
-// * Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote
-//   products derived from this software without specific prior written permission.
+// * Neither the name of the copyright holder nor the names of its contributors
+//   may be used to endorse or promote products derived from this software
+//   without specific prior written permission.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -28,9 +29,10 @@ use core::panic;
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 use std::str::FromStr;
+use std::time::{Duration, Instant};
 
 use futures::channel::mpsc;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use twilight_model::gateway::payload::outgoing::{request_guild_members, update_presence, update_voice_state};
 use twilight_model::gateway::presence::{Activity, ActivityType, Status};
 use twilight_model::gateway::OpCode;
@@ -85,7 +87,6 @@ async fn main() {
         .expect("Filed to connect to orchestrator");
 
     // TODO: TLS
-    // if
 
     let client = orchestrator_client::OrchestratorClient::new(channel);
     let mut joins: Vec<tokio::task::JoinHandle<()>> = Vec::new();
@@ -115,20 +116,17 @@ async fn main() {
 
             let mut shard = twilight_gateway::Shard::new(shard_id, token, intents);
             shard.next_message().await.unwrap();
-            send_state.start_send(to_state(&shard)).unwrap();
+            send_state.feed(to_state(&shard)).await.unwrap();
 
-            let commands = shard.sender();
-            tokio::join!(handle_events(shard, sender), handle_instructions(stream, commands));
+            let send_command = shard.sender();
+            tokio::join!(
+                handle_events(shard, sender, send_state),
+                handle_instructions(stream, send_command),
+            );
         }));
     }
 
     futures::future::join_all(joins).await;
-    // async {
-    //     sender
-    //         .consume_all(Box::new(Box::pin(events.filter_map(map_event))))
-    //         .await;
-    //     log::info!("Gateway stopped, closing server");
-    // };
 }
 
 fn to_state(shard: &twilight_gateway::Shard) -> Shard {
@@ -154,11 +152,25 @@ fn to_state(shard: &twilight_gateway::Shard) -> Shard {
     }
 }
 
-async fn handle_events(mut shard: twilight_gateway::Shard, sender: senders::zmq::ZmqSender) {
+const _STATE_TIME: Duration = Duration::new(30, 0);
+
+async fn handle_events(
+    mut shard: twilight_gateway::Shard,
+    sender: senders::zmq::ZmqSender,
+    mut send_state: mpsc::UnboundedSender<Shard>,
+) {
     let shard_id = shard.id().number();
+    let mut update_state_at = Instant::now() - _STATE_TIME;
     let stream = async_stream::stream! {
         loop {
-            match shard.next_message().await {
+            let message = shard.next_message().await;
+            let now = Instant::now();
+            if now.ge(&update_state_at) {
+                send_state.feed(to_state(&shard)).await.unwrap();
+                update_state_at = now + _STATE_TIME;
+            };
+
+            match message {
                 Ok(message) => {
                     let payload = match message {
                         twilight_gateway::Message::Text(payload) => payload,
@@ -172,6 +184,8 @@ async fn handle_events(mut shard: twilight_gateway::Shard, sender: senders::zmq:
                         yield (shard_id, event_name, payload);
                     }
                 }
+                // TODO: handle the shard being disconnected properly
+                // the server needs to be informed of this!!!
                 Err(source) => break, // TODO: log
             };
         };
