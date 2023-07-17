@@ -2,7 +2,7 @@
 # cython: language_level=3
 # BSD 3-Clause License
 #
-# Copyright (c) 2021, Faster Speeding
+# Copyright (c) 2021-2023 Faster Speeding
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -249,7 +249,7 @@ class ZmqReceiver(abc.AbstractReceiver):
             await self._join_semaphore.wait_for_full_release()
 
 
-def _load_auth(socket: zmq.Socket) -> None:
+def _load_auth(socket: zmq.Socket[bytes]) -> None:
     import zmq
     import zmq.auth
 

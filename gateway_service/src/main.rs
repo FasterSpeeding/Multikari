@@ -1,6 +1,6 @@
 // BSD 3-Clause License
 //
-// Copyright (c) 2021-2022, Lucina
+// Copyright (c) 2021-2023, Lucina
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -28,270 +28,287 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-#![feature(async_closure)]
-use std::collections::HashSet;
-use std::io;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::time::{Duration, Instant};
 
-use actix_web::web::{Data, Path};
-use actix_web::{get, patch, post, App, HttpRequest, HttpResponse, HttpServer};
-use closure::closure;
-use futures_util::StreamExt;
-use openssl::ssl;
-use tokio::sync::RwLock;
-mod manager;
+use futures::channel::mpsc;
+use futures::{SinkExt, StreamExt};
+use twilight_model::gateway::payload::outgoing::{request_guild_members, update_presence, update_voice_state};
+use twilight_model::gateway::presence::{Activity, ActivityType, Status};
+use twilight_model::gateway::OpCode;
+use twilight_model::id::Id;
 mod senders;
 use senders::Sender;
-use shared::dto;
-use twilight_gateway::{Cluster, Intents};
+use twilight_gateway::{CloseFrame, Intents};
 
-struct DownedShards {
-    pub shard_ids: RwLock<HashSet<u64>>,
+mod utility;
+
+tonic::include_proto!("_");
+
+fn try_get_int_variable(name: &str) -> Option<u64> {
+    utility::try_get_env_variable("name")
+        .map(|v| u64::from_str(&v))
+        .transpose()
+        .unwrap_or_else(|_| panic!("Failed to parse {name}"))
 }
 
-impl DownedShards {
-    fn new() -> Self {
-        Self {
-            shard_ids: RwLock::new(HashSet::new()),
-        }
-    }
-}
 
+pub fn setup() {
+    let dotenv_result = dotenv::dotenv();
+    simple_logger::init_with_env().expect("Failed to set up logger");
 
-fn shard_to_dto(shard: &twilight_gateway::Shard, downed_shards: &HashSet<u64>) -> dto::Shard {
-    let is_alive;
-    let latency;
-    let seq;
-    let session_id;
-    let shard_id = shard.config().shard()[0];
-    if let Ok(info) = shard.info() {
-        is_alive = !downed_shards.contains(&shard_id);
-        latency = info.latency().recent().back().map(std::time::Duration::as_secs_f64);
-        session_id = info.session_id().map(str::to_string);
-        seq = Some(info.seq())
-    } else {
-        is_alive = false;
-        latency = None;
-        seq = None;
-        session_id = None;
-    };
-
-    dto::Shard {
-        heartbeat_latency: latency,
-        is_alive,
-        // intents: config.intents().bits(),
-        seq,
-        session_id,
-        shard_id,
-    }
-}
-
-fn disconnect_to_dto(shard: &twilight_gateway::Shard, resume: twilight_gateway::shard::ResumeSession) -> dto::Shard {
-    dto::Shard {
-        heartbeat_latency: None,
-        is_alive: true,
-        // intents: config.intents().bits(),
-        seq: Some(resume.sequence),
-        session_id: Some(resume.session_id),
-        shard_id: shard.config().shard()[0],
-    }
-}
-
-#[post("/disconnect")]
-async fn post_disconnect(cluster: Data<Arc<Cluster>>, downed_shards: Data<Arc<DownedShards>>) -> HttpResponse {
-    let mut downed_shards = downed_shards.shard_ids.write().await;
-
-    let results = cluster
-        .down_resumable()
-        .drain()
-        // Don't bother with already disconnected shards!!!
-        .filter(|(shard_id, _)| !downed_shards.contains(shard_id))
-        .map(|(shard_id, resume)| disconnect_to_dto(cluster.shard(shard_id).unwrap(), resume))
-        .collect::<Vec<_>>();
-
-    downed_shards.extend(results.iter().map(|s| s.shard_id));
-    HttpResponse::Ok().json(results)
-}
-
-#[get("/status")]
-async fn get_status(cluster: Data<Arc<Cluster>>, downed_shards: Data<Arc<DownedShards>>) -> HttpResponse {
-    let downed_shards = downed_shards.shard_ids.read().await;
-    let response = cluster
-        .shards()
-        .map(|s| shard_to_dto(s, &downed_shards))
-        .collect::<Vec<_>>();
-
-    HttpResponse::Ok().json(response)
-}
-
-#[get("/shards/{shard_id}/status")]
-async fn get_shard_status(
-    cluster: Data<Arc<Cluster>>,
-    shard_id: Path<u64>,
-    downed_shards: Data<Arc<DownedShards>>,
-) -> HttpResponse {
-    if let Some(shard) = cluster.shard(shard_id.into_inner()) {
-        let downed_shards = downed_shards.shard_ids.read().await;
-
-        HttpResponse::Ok().json(shard_to_dto(shard, &downed_shards))
-    } else {
-        HttpResponse::NotFound().body("Shard not found")
-    }
-}
-
-#[post("/shards/{shard_id}/disconnect")]
-async fn post_shard_disconnect(
-    cluster: Data<Arc<Cluster>>,
-    shard_id: Path<u64>,
-    downed_shards: Data<Arc<DownedShards>>,
-) -> HttpResponse {
-    let shard_id = shard_id.into_inner();
-    if let Some(shard) = cluster.shard(shard_id) {
-        let mut downed_shards = downed_shards.shard_ids.write().await;
-        if downed_shards.contains(&shard_id) {
-            return HttpResponse::Conflict().body("Shard already down");
-        }
-
-        match shard.shutdown_resumable() {
-            (_, Some(resume)) => {
-                downed_shards.insert(shard_id);
-                HttpResponse::Ok().json(disconnect_to_dto(shard, resume))
-            }
-            // TODO: do we want to just force stop it anyways?
-            _ => HttpResponse::Conflict().body("Shard hasn't been started yet"),
-        }
-    } else {
-        HttpResponse::NotFound().body("Shard not found")
+    if let Err(error) = dotenv_result {
+        log::info!("Couldn't load .env file: {}", error);
     }
 }
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    shared::setup();
+    setup();
 
-    let manager_url = shared::unstrip_url(shared::get_env_variable("MANAGER_URL"));
-    let url = shared::strip_url(shared::get_env_variable("GATEWAY_WORKER_URL"));
-    let url_has_port = url.split_once(':').is_some();
-    let token = shared::get_env_variable("DISCORD_TOKEN");
+    let shard_count = try_get_int_variable("SHARD_COUNT").unwrap_or(1);
+    // TODO: add metadata rpc method to server to get this
+    let shard_total = try_get_int_variable("SHARD_TOTAL").unwrap_or(1);
+
+    let url = utility::get_env_variable("ORCHESTRATOR_URL");
+    let token = utility::get_env_variable("DISCORD_TOKEN");
     let intents =
-        match shared::try_get_env_variable("DISCORD_INTENTS").map(|v| u64::from_str(&v).map(Intents::from_bits)) {
+        match utility::try_get_env_variable("DISCORD_INTENTS").map(|v| u64::from_str(&v).map(Intents::from_bits)) {
             Some(Ok(Some(intents))) => intents,
             None => Intents::all() & !(Intents::GUILD_MEMBERS | Intents::GUILD_PRESENCES),
             _ => panic!("Invalid INTENTS value in env variables"),
         };
 
-    let manager = Arc::new(manager::Client::new(&manager_url, &token));
-    let sender = senders::zmq::ZmqSender::new().await;
-    let (cluster, events) = twilight_gateway::Cluster::builder(&token, intents)
-        .event_types(twilight_gateway::EventTypeFlags::SHARD_PAYLOAD)
-        .shard_scheme(twilight_gateway::cluster::scheme::ShardScheme::try_from((0..5, 5)).unwrap())
-        .build()
+    let sender = senders::zmq::ZmqSender::new();
+    let url = tonic::transport::Uri::from_str(&url).unwrap();
+    let channel = tonic::transport::Channel::builder(url)
+        .connect()
         .await
-        .expect("Failed to make gateway connection");
+        .expect("Filed to connect to orchestrator");
 
-    let cluster = std::sync::Arc::new(cluster);
-    let start_cluster = cluster.clone();
-    tokio::spawn(async move {
-        start_cluster.up().await;
-    });
+    // TODO: TLS
 
-    let ssl_key = shared::get_env_variable("MANAGER_SSL_KEY");
-    let ssl_cert = shared::get_env_variable("MANAGER_SSL_CERT");
-    log::info!("Starting with SSL");
+    let client = orchestrator_client::OrchestratorClient::new(channel);
+    let mut joins: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
-    let mut server = None;
-    for port in 4000..5000 {
-        //  Allow the port to be specified for a specific instance.
-        let bind_url = if url_has_port {
-            url.clone()
-        } else {
-            format!("{}:{}", url, port)
-        };
+    for _ in 0..shard_count {
+        let mut client = client.clone();
+        let sender = sender.clone();
+        let token = token.clone();
+        joins.push(tokio::spawn(async move {
+            let (mut send_state, recv_state) = mpsc::unbounded();
+            let mut stream = client.acquire_next(recv_state).await.unwrap().into_inner();
 
-        let mut ssl_acceptor = ssl::SslAcceptor::mozilla_intermediate(ssl::SslMethod::tls_server())
-            .expect("Failed to creatte ssl acceptor");
-        ssl_acceptor
-            .set_private_key_file(&ssl_key, ssl::SslFiletype::PEM)
-            .expect("Couldn't process private key file");
-        ssl_acceptor
-            .set_certificate_chain_file(&ssl_cert)
-            .expect("Couldn't process certificate file");
-        let downed_shards = Arc::from(DownedShards::new());
+            let instruction = stream.message().await;
 
-        let bind_result = HttpServer::new(
-            closure!(clone cluster, clone manager, clone token, clone downed_shards, || {
-                App::new()
-                    .wrap(shared::middleware::TokenAuth::new(&token))
-                    .wrap(actix_web::middleware::Logger::default())
-                    .app_data(Data::new(cluster.clone()))
-                    .app_data(Data::new(manager.clone()))
-                    .app_data(Data::new(downed_shards.clone()))
-                    .service(post_disconnect)
-                    .service(get_status)
-                    .service(get_shard_status)
-                    .service(post_shard_disconnect)
-            }),
-        )
-        .workers(1)
-        .bind_openssl(&bind_url, ssl_acceptor);
+            // TODO: handle error and disconnect
+            let instruction = match instruction {
+                Err(err) => unimplemented!("{} unexpected error", err),
+                // TODO: log
+                Ok(None) => return,
+                Ok(Some(instruction)) if instruction.r#type == 2 => instruction,
+                // TODO: properly check for DISCONNECTS, possible shard_id and
+                // other unexpected cases
+                _ => unimplemented!("Unexpectec cases"),
+            };
+            let shard_id =
+                twilight_model::gateway::ShardId::new(instruction.shard_id.unwrap().try_into().unwrap(), shard_total);
 
-        server = match bind_result.map_err(|v| v.kind()) {
-            Ok(server) => {
-                log::info!("Binding to address {}", bind_url);
-                Some(server)
-            }
-            Err(io::ErrorKind::AddrInUse) => {
-                if url_has_port {
-                    //  Allows the port to be specified for a specific instance.
-                    panic!("Couldn't bind address {}, it's already in use", url);
-                }
-                log::debug!("Skipping address {}, it's already in use", bind_url);
-                continue;
-            }
-            Err(error) => {
-                panic!("Failed to bind to address {}: {:?}", bind_url, error);
-            }
-        };
-        break;
+            let mut shard = twilight_gateway::Shard::new(shard_id, token, intents);
+            shard.next_message().await.unwrap();
+            send_state.feed(to_state(&shard)).await.unwrap();
+
+            let send_command = shard.sender();
+            tokio::join!(
+                handle_events(shard, sender, send_state),
+                handle_instructions(stream, send_command),
+            );
+        }));
     }
 
-    if let Some(server) = server.map(|s| s.run()) {
-        let handle = server.handle();
-        futures_util::join!(
-            async {
-                // Todo: error handling?
-                server.await.expect("Failed to start server");
-                log::info!("Server stopped, closing gateway connection");
-                cluster.down_resumable();
-            },
-            async {
-                sender
-                    .consume_all(Box::new(Box::pin(events.filter_map(map_event))))
-                    .await;
-                log::info!("Gateway stopped, closing server");
-                handle.stop(true).await;
-            }
-        );
-    } else {
-        panic!("Failed to allocate any port on path {}", url)
-    };
+    futures::future::join_all(joins).await;
 }
 
-async fn map_event((shard_id, event): (u64, twilight_gateway::Event)) -> Option<senders::Event> {
-    let event = match event {
-        twilight_gateway::Event::ShardPayload(payload) => payload,
-        _ => return None,
+fn to_state(shard: &twilight_gateway::Shard) -> Shard {
+    let (session_id, seq) = shard
+        .session()
+        .map(|v| (Some(v.id().to_string()), Some(v.sequence() as i64)))
+        .unwrap_or_else(|| (None, None));
+
+    let latency = shard
+        .latency()
+        .recent()
+        .first()
+        .map(|v| v.as_secs_f64())
+        .unwrap_or(f64::NAN);
+
+    Shard {
+        state: if shard.status().is_disconnected() { 2 } else { 1 },
+        last_seen: None,
+        latency,
+        session_id,
+        seq,
+        shard_id: shard.id().number() as i64,
+    }
+}
+
+const _STATE_TIME: Duration = Duration::new(30, 0);
+
+async fn handle_events(
+    mut shard: twilight_gateway::Shard,
+    sender: senders::zmq::ZmqSender,
+    mut send_state: mpsc::UnboundedSender<Shard>,
+) {
+    let shard_id = shard.id().number();
+    let mut update_state_at = Instant::now() - _STATE_TIME;
+    let stream = async_stream::stream! {
+        loop {
+            let message = shard.next_message().await;
+            let now = Instant::now();
+            if now.ge(&update_state_at) {
+                send_state.feed(to_state(&shard)).await.unwrap();
+                update_state_at = now + _STATE_TIME;
+            };
+
+            match message {
+                Ok(message) => {
+                    let payload = match message {
+                        twilight_gateway::Message::Text(payload) => payload,
+                        twilight_gateway::Message::Close(_) => return,
+                    };
+
+                    if let Some(event_name) =
+                        twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(&payload)
+                            .and_then(|v| v.event_type().map(|v| v.to_owned()))
+                    {
+                        yield (shard_id, event_name, payload);
+                    }
+                }
+                // TODO: handle the shard being disconnected properly
+                // the server needs to be informed of this!!!
+                Err(source) => break, // TODO: log
+            };
+        };
     };
-    let payload = match std::str::from_utf8(&event.bytes) {
-        Ok(value) => value,
-        Err(err) => {
-            log::error!("Ignoring payload which failed to convert to utf8: {}", err);
-            return None;
-        }
+    sender.consume_all(Box::new(Box::pin(stream))).await;
+}
+
+async fn handle_instructions(mut stream: tonic::Streaming<Instruction>, sender: twilight_gateway::MessageSender) {
+    let mut presence = update_presence::UpdatePresencePayload {
+        activities: vec![],
+        afk: false,
+        since: None,
+        status: Status::Online,
     };
 
-    twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(payload)
-        .and_then(|v| v.event_type_ref().map(|v| v.to_owned()))
-        .map(move |v| (shard_id, v, event.bytes))
+    loop {
+        let instruction = match stream.next().await {
+            Some(Ok(instruction)) => instruction,
+            Some(Err(_)) => continue, // TODO: TODO: log
+            None => break,
+        };
+
+        match instruction.r#type {
+            // DISCONNECT
+            0 => {
+                sender.close(CloseFrame::NORMAL).unwrap();
+                break;
+            }
+            // GATEWAY_PAYLOAD
+            1 => {}
+            // Unexpected (including CONNECT)
+            _ => continue, // TODO: log
+        };
+
+        match instruction.payload {
+            Some(instruction::Payload::PresenceUpdate(payload)) => {
+                match payload.idle_since {
+                    Some(presence_update::IdleSince::IdleTimestamp(timestamp)) => {
+                        presence.since = Some(timestamp.seconds as u64)
+                    }
+                    None => presence.since = None,
+                    _ => {}
+                };
+
+                let status = payload.status.map(|status| match status.as_str() {
+                    "dnd" => Status::DoNotDisturb,
+                    "idle" => Status::Idle,
+                    "invisible" => Status::Invisible,
+                    "offline" => Status::Offline,
+                    "online" => Status::Online,
+                    _ => unimplemented!("Shouldn't happen"),
+                });
+                if let Some(status) = status {
+                    presence.status = status;
+                };
+
+                match payload.activity {
+                    Some(presence_update::Activity::ActivityPayload(activity)) => {
+                        presence.activities.clear();
+                        presence.activities.push(Activity {
+                            application_id: None,
+                            assets: None,
+                            buttons: vec![],
+                            created_at: None,
+                            details: None,
+                            emoji: None,
+                            flags: None,
+                            id: None,
+                            instance: None,
+                            kind: ActivityType::from(u8::try_from(activity.r#type).unwrap()),
+                            name: activity.name,
+                            party: None,
+                            secrets: None,
+                            state: None,
+                            timestamps: None,
+                            url: activity.url,
+                        })
+                    }
+                    Some(presence_update::Activity::UndefinedActivity(_)) => {
+                        presence.activities.clear();
+                    }
+                    None => {}
+                }
+
+                sender.command(&update_presence::UpdatePresence {
+                    op: OpCode::PresenceUpdate,
+                    d: presence.clone(),
+                })
+            }
+            Some(instruction::Payload::VoiceState(payload)) => sender.command(&update_voice_state::UpdateVoiceState {
+                op: OpCode::VoiceStateUpdate,
+                d: update_voice_state::UpdateVoiceStateInfo {
+                    channel_id: payload.channel_id.map(|v| Id::new(v as u64)),
+                    guild_id: Id::new(payload.guild_id as u64),
+                    self_deaf: payload.self_deaf.unwrap_or_default(),
+                    self_mute: payload.self_mute.unwrap_or_default(),
+                },
+            }),
+            Some(instruction::Payload::RequestGuildMembers(payload)) => {
+                sender.command(&request_guild_members::RequestGuildMembers {
+                    op: OpCode::RequestGuildMembers,
+                    d: request_guild_members::RequestGuildMembersInfo {
+                        guild_id: Id::new(payload.guild_id as u64),
+                        limit: Some(payload.limit as u64),
+                        nonce: payload.nonce,
+                        presences: payload.include_presences,
+                        query: if payload.query.is_empty() {
+                            None
+                        } else {
+                            Some(payload.query)
+                        },
+                        user_ids: if payload.users.is_empty() {
+                            None
+                        } else {
+                            Some(request_guild_members::RequestGuildMemberId::Multiple(
+                                payload.users.iter().map(|v| Id::new(*v as u64)).collect(),
+                            ))
+                        },
+                    },
+                })
+            }
+            None => continue, // TODO: log
+        }
+        .unwrap();
+    }
 }

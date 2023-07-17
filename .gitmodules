@@ -1,0 +1,3 @@
+[submodule "orchestrator"]
+	path = orchestrator
+	url = https://github.com/FasterSpeeding/hikari-orchestrator.git

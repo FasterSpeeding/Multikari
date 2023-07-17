@@ -1,6 +1,6 @@
 // BSD 3-Clause License
 //
-// Copyright (c) 2021-2022, Lucina
+// Copyright (c) 2021-2023, Lucina
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -29,12 +29,12 @@
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
 use async_trait::async_trait;
-use futures_util::Stream;
+use futures::Stream;
 
-pub type Event = (u64, String, Vec<u8>);
+pub type Event = (u64, String, String);
 pub type EventStream = dyn Stream<Item = Event> + Send + Unpin;
 
 #[async_trait]
 pub trait Sender {
-    async fn consume_all(&self, stream: Box<EventStream>);
+    async fn consume_all(&self, event: Box<EventStream>);
 }

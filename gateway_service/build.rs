@@ -1,6 +1,6 @@
 // BSD 3-Clause License
 //
-// Copyright (c) 2021-2022, Lucina
+// Copyright (c) 2021-2023, Lucina
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -28,58 +28,10 @@
 // CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
 // ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 // POSSIBILITY OF SUCH DAMAGE.
-#[cfg(feature = "dto")]
-pub mod dto;
-#[cfg(feature = "middleware")]
-pub mod middleware;
-
-use std::str::FromStr;
-
-pub fn load_env() -> dotenv::Result<std::path::PathBuf> {
-    dotenv::dotenv()
-}
-
-pub fn try_get_env_variable(key: &str) -> Option<String> {
-    dotenv::var(key).or_else(|_| std::env::var(key)).ok()
-}
-
-pub fn get_env_variable(key: &str) -> String {
-    try_get_env_variable(key).unwrap_or_else(|| panic!("Environment variable {} not found", key))
-}
-
-pub fn strip_url<S: Into<String>>(url: S) -> String {
-    url.into().replacen("http://", "", 1).replacen("https://", "", 1)
-}
-
-pub fn unstrip_url<S: Into<String>>(url: S) -> String {
-    let url = url.into();
-    if !url.starts_with("http://") && !url.starts_with("https://") {
-        format!("https://{}", url)
-    } else {
-        url
-    }
-}
-
-pub fn setup_logging() {
-    let level = match try_get_env_variable("LOG_LEVEL").map(|v| log::LevelFilter::from_str(&v)) {
-        Some(Err(..)) => {
-            panic!("Invalid log level provided, expected TRACE, DEBUG, INFO, WARN or ERROR")
-        }
-        Some(Ok(level)) => level,
-        None => log::LevelFilter::Info,
-    };
-
-    simple_logger::SimpleLogger::new()
-        .with_level(level)
-        .init()
-        .expect("Failed to set up logger");
-}
-
-pub fn setup() {
-    let dotenv_result = load_env();
-    setup_logging();
-
-    if let Err(error) = dotenv_result {
-        log::info!("Couldn't load .env file: {}", error);
-    }
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tonic_build::configure()
+        .build_server(false)
+        .protoc_arg("--experimental_allow_proto3_optional")
+        .compile(&["../orchestrator/schema.proto"], &["../orchestrator"])?;
+    Ok(())
 }

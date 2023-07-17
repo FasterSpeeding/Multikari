@@ -1,6 +1,6 @@
 // BSD 3-Clause License
 //
-// Copyright (c) 2021-2022, Lucina
+// Copyright (c) 2021-2023, Lucina
 // All rights reserved.
 //
 // Redistribution and use in source and binary forms, with or without
@@ -30,4 +30,4 @@
 // POSSIBILITY OF SUCH DAMAGE.
 pub mod traits;
 pub mod zmq;
-pub use traits::{Event, EventStream, Sender};
+pub use traits::{Event, Sender};

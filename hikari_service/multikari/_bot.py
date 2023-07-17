@@ -2,7 +2,7 @@
 # cython: language_level=3
 # BSD 3-Clause License
 #
-# Copyright (c) 2021, Faster Speeding
+# Copyright (c) 2021-2023 Faster Speeding
 # All rights reserved.
 #
 # Redistribution and use in source and binary forms, with or without
@@ -51,6 +51,7 @@ if typing.TYPE_CHECKING:
     from collections import abc as collections
 
     from hikari.api import event_manager as event_manager_api
+    from typing_extensions import Self
 
     _EventT = typing.TypeVar("_EventT", bound=hikari.Event)
 
@@ -79,6 +80,7 @@ class MQBot(
         "_rest",
         "_shard_count",
         "_shards",
+        "_voice",
     )
 
     def __init__(
@@ -133,6 +135,33 @@ class MQBot(
             token_type=hikari.TokenType.BOT,
             rest_url=discord_url,
         )
+        self._voice = hikari.impl.VoiceComponentImpl(self)
+
+    @classmethod
+    def create_zmq(
+        cls,
+        pipeline_url: str,
+        publish_url: str,
+        token: str,
+        /,
+        *,
+        http_settings: typing.Optional[hikari.impl.HTTPSettings] = None,
+        log_level: typing.Union[str, int, None] = logging.INFO,
+        max_rate_limit: float = 300.0,
+        max_retries: int = 3,
+        proxy_settings: typing.Optional[hikari.impl.ProxySettings] = None,
+        discord_url: typing.Optional[str] = None,
+    ) -> Self:
+        return cls(
+            _receivers.ZmqReceiver(pipeline_url, publish_url),
+            token,
+            http_settings=http_settings,
+            log_level=log_level,
+            max_rate_limit=max_rate_limit,
+            max_retries=max_retries,
+            proxy_settings=proxy_settings,
+            discord_url=discord_url,
+        )
 
     @property
     def entity_factory(self) -> hikari.api.EntityFactory:
@@ -185,9 +214,9 @@ class MQBot(
     def shard_count(self) -> int:
         return self._shard_count  # TODO: update this with data received from the manager
 
-    @classmethod
-    def zmq(cls) -> MQBot:
-        raise NotImplementedError
+    @property
+    def voice(self) -> hikari.api.VoiceComponent:
+        return self._voice
 
     def get_me(self) -> typing.Optional[hikari.OwnUser]:
         return self._me
@@ -250,7 +279,10 @@ class MQBot(
             return await self.join()
 
         self._is_closing = True
+        await self._event_manager.dispatch(self._event_factory.deserialize_stopping_event())
         await self._receiver.disconnect()
+        await self._voice.close()
+        await self._event_manager.dispatch(self._event_factory.deserialize_stopped_event())
         await self._rest.close()
         self._is_alive = False
         self._is_closing = False
@@ -281,7 +313,10 @@ class MQBot(
 
         self._is_alive = True
         self._rest.start()
+        self._voice.start()
+        await self._event_manager.dispatch(self._event_factory.deserialize_starting_event())
         await self._receiver.connect(self._on_pipeline, self._on_subbed)
+        await self._event_manager.dispatch(self._event_factory.deserialize_started_event())
 
     def _on_pipeline(self, shard_id: int, event_name: str, payload: bytes, /) -> None:
         try:
