@@ -431,6 +431,7 @@ dependencies = [
  "log",
  "prost",
  "prost-types",
+ "serde_json",
  "simple_logger",
  "tmq",
  "tokio",

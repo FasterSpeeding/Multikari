@@ -33,6 +33,8 @@ use std::time::{Duration, Instant};
 
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
+use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
+use twilight_model::gateway::payload::incoming::Ready;
 use twilight_model::gateway::payload::outgoing::{request_guild_members, update_presence, update_voice_state};
 use twilight_model::gateway::presence::{Activity, ActivityType, Status};
 use twilight_model::gateway::OpCode;
@@ -114,13 +116,15 @@ async fn main() {
             let shard_id =
                 twilight_model::gateway::ShardId::new(instruction.shard_id.unwrap().try_into().unwrap(), shard_total);
 
-            let mut shard = twilight_gateway::Shard::new(shard_id, token, intents);
-            shard.next_message().await.unwrap();
-            send_state.feed(to_state(&shard)).await.unwrap();
+            let shard = twilight_gateway::Shard::new(shard_id, token, intents);
+            // TODO: this message shouldn't be ignored. Also what even is it?
+            // Although right now it is likely just a heartbeat
+            let gateway_url = &instruction.shard_state.as_ref().unwrap().gateway_url;
+            send_state.feed(to_state(&shard, gateway_url)).await.unwrap();
 
             let send_command = shard.sender();
             tokio::join!(
-                handle_events(shard, sender, send_state),
+                handle_events(shard, sender, send_state, instruction.shard_state.unwrap()),
                 handle_instructions(stream, send_command),
             );
         }));
@@ -129,7 +133,7 @@ async fn main() {
     futures::future::join_all(joins).await;
 }
 
-fn to_state(shard: &twilight_gateway::Shard) -> Shard {
+fn to_state(shard: &twilight_gateway::Shard, gateway_url: &str) -> Shard {
     let (session_id, seq) = shard
         .session()
         .map(|v| (Some(v.id().to_string()), Some(v.sequence() as i64)))
@@ -149,6 +153,7 @@ fn to_state(shard: &twilight_gateway::Shard) -> Shard {
         session_id,
         seq,
         shard_id: shard.id().number() as i64,
+        gateway_url: gateway_url.to_string(),
     }
 }
 
@@ -158,15 +163,18 @@ async fn handle_events(
     mut shard: twilight_gateway::Shard,
     sender: senders::zmq::ZmqSender,
     mut send_state: mpsc::UnboundedSender<Shard>,
+    shard_state: Shard,
 ) {
     let shard_id = shard.id().number();
     let mut update_state_at = Instant::now() - _STATE_TIME;
+    let mut gateway_url = shard_state.gateway_url;
+
     let stream = async_stream::stream! {
         loop {
             let message = shard.next_message().await;
             let now = Instant::now();
             if now.ge(&update_state_at) {
-                send_state.feed(to_state(&shard)).await.unwrap();
+                send_state.feed(to_state(&shard, &gateway_url)).await.unwrap();
                 update_state_at = now + _STATE_TIME;
             };
 
@@ -177,10 +185,16 @@ async fn handle_events(
                         twilight_gateway::Message::Close(_) => return,
                     };
 
-                    if let Some(event_name) =
-                        twilight_model::gateway::event::gateway::GatewayEventDeserializer::from_json(&payload)
-                            .and_then(|v| v.event_type().map(|v| v.to_owned()))
-                    {
+                    let event_name = GatewayEventDeserializer::from_json(&payload)
+                        .and_then(|v| v.event_type().map(|v| v.to_owned()));
+
+                    if let Some(event_name) = event_name {
+                        if event_name.eq("READY") {
+                            match serde_json::from_str::<Ready>(&payload) {
+                                Ok(ready) => gateway_url = ready.resume_gateway_url,
+                                Err(err) => return, // TODO: log
+                            };
+                        };
                         yield (shard_id, event_name, payload);
                     }
                 }
