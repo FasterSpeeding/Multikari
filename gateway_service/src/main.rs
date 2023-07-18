@@ -178,30 +178,30 @@ async fn handle_events(
                 update_state_at = now + _STATE_TIME;
             };
 
-            match message {
-                Ok(message) => {
-                    let payload = match message {
-                        twilight_gateway::Message::Text(payload) => payload,
-                        twilight_gateway::Message::Close(_) => return,
-                    };
-
-                    let event_name = GatewayEventDeserializer::from_json(&payload)
-                        .and_then(|v| v.event_type().map(|v| v.to_owned()));
-
-                    if let Some(event_name) = event_name {
-                        if event_name.eq("READY") {
-                            match serde_json::from_str::<Ready>(&payload) {
-                                Ok(ready) => gateway_url = ready.resume_gateway_url,
-                                Err(err) => return, // TODO: log
-                            };
-                        };
-                        yield (shard_id, event_name, payload);
-                    }
-                }
+            let message = match message {
+                Ok(message) => { message },
                 // TODO: handle the shard being disconnected properly
                 // the server needs to be informed of this!!!
                 Err(source) => break, // TODO: log
             };
+
+            let payload = match message {
+                twilight_gateway::Message::Text(payload) => payload,
+                twilight_gateway::Message::Close(_) => return,
+            };
+
+            let event_name =
+                GatewayEventDeserializer::from_json(&payload).and_then(|v| v.event_type().map(|v| v.to_owned()));
+
+            if let Some(event_name) = event_name {
+                if event_name.eq("READY") {
+                    match serde_json::from_str::<Ready>(&payload) {
+                        Ok(ready) => gateway_url = ready.resume_gateway_url,
+                        Err(err) => return, // TODO: log
+                    };
+                };
+                yield (shard_id, event_name, payload);
+            }
         };
     };
     sender.consume_all(Box::new(Box::pin(stream))).await;
