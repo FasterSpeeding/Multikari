@@ -205,9 +205,6 @@ class MQBot(
 
     @property
     def heartbeat_latency(self) -> float:
-        if not self._orchestrator.remote_shards:
-            return float("nan")
-
         latancies = [
             shard.heartbeat_latency
             for shard in self._orchestrator.remote_shards.values()
