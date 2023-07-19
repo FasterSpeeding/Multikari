@@ -36,16 +36,17 @@ __all__ = ["MQBot"]
 import asyncio
 import datetime
 import logging
+import math
 import typing
 import warnings
 from concurrent import futures
 
 import hikari
+import hikari_orchestrator
 from hikari.impl import event_factory  # TODO: this needs to be exported top-level
 
-from . import _event_manager
-from . import _receivers
-from . import _shards as shards_
+from . import _event_manager  # pyright: ignore[reportPrivateUsage]
+from . import _receivers  # pyright: ignore[reportPrivateUsage]
 
 if typing.TYPE_CHECKING:
     from collections import abc as collections
@@ -74,18 +75,19 @@ class MQBot(
         "_is_alive",
         "_is_closing",
         "_join_event",
+        "_manager_url",
         "_me",
+        "_orchestrator",
         "_proxy_settings",
         "_receiver",
         "_rest",
-        "_shard_count",
-        "_shards",
         "_voice",
     )
 
     def __init__(
         self,
         receiver: _receivers.abc.AbstractReceiver,
+        manager_url: str,
         token: str,
         /,
         *,
@@ -109,13 +111,13 @@ class MQBot(
         self._intents = hikari.Intents.NONE
         self._is_alive = False
         self._is_closing = False
+        self._manager_url = manager_url
         self._me: typing.Optional[hikari.OwnUser] = None
+        self._orchestrator = hikari_orchestrator.Client()
         self._receiver = receiver
-        self._shards: dict[int, shards_.Shard] = {}
 
         self._http_settings = http_settings or hikari.impl.HTTPSettings()
         self._proxy_settings = proxy_settings or hikari.impl.ProxySettings()
-        self._shard_count = -1
 
         self._executor: typing.Optional[futures.Executor] = None
 
@@ -199,20 +201,24 @@ class MQBot(
 
     @property
     def heartbeat_latencies(self) -> collections.Mapping[int, float]:
-        return {s.id: s.heartbeat_latency for s in self._shards.values()}
+        return {shard_id: shard.heartbeat_latency for shard_id, shard in self._orchestrator.remote_shards.items()}
 
     @property
     def heartbeat_latency(self) -> float:
-        latancies = [s.heartbeat_latency for s in self._shards.values()]
+        latancies = [
+            shard.heartbeat_latency
+            for shard in self._orchestrator.remote_shards.values()
+            if not math.isnan(shard.heartbeat_latency)
+        ]
         return sum(latancies) / len(latancies) if latancies else float("nan")
 
     @property
     def shards(self) -> collections.Mapping[int, hikari.api.GatewayShard]:
-        return self._shards.copy()
+        return self._orchestrator.remote_shards
 
     @property
     def shard_count(self) -> int:
-        return self._shard_count  # TODO: update this with data received from the manager
+        return len(self._orchestrator.remote_shards)
 
     @property
     def voice(self) -> hikari.api.VoiceComponent:
@@ -220,18 +226,6 @@ class MQBot(
 
     def get_me(self) -> typing.Optional[hikari.OwnUser]:
         return self._me
-
-    def _make_shard(self, shard_id: int, /) -> shards_.Shard:
-        return shards_.Shard(
-            receiver=self._receiver,
-            shard_id=shard_id,
-            shard_count=self._shard_count,
-            intents=self.intents,
-            user_id=hikari.Snowflake(0),
-        )
-
-    async def _sync_gateway_info(self) -> None:
-        ...
 
     async def update_presence(
         self,
@@ -241,7 +235,7 @@ class MQBot(
         activity: hikari.UndefinedNoneOr[hikari.Activity] = hikari.UNDEFINED,
         afk: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
     ) -> None:
-        raise NotImplementedError
+        await self._orchestrator.update_presence(status=status, idle_since=idle_since, activity=activity, afk=afk)
 
     async def update_voice_state(
         self,
@@ -251,7 +245,7 @@ class MQBot(
         self_mute: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
         self_deaf: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
     ) -> None:
-        raise NotImplementedError
+        await self._orchestrator.update_voice_state(guild, channel, self_mute=self_mute, self_deaf=self_deaf)
 
     async def request_guild_members(
         self,
@@ -263,7 +257,9 @@ class MQBot(
         users: hikari.UndefinedOr[hikari.SnowflakeishSequence[hikari.User]] = hikari.UNDEFINED,
         nonce: hikari.UndefinedOr[str] = hikari.UNDEFINED,
     ) -> None:
-        raise NotImplementedError
+        await self._orchestrator.request_guild_members(
+            guild, include_presences=include_presences, query=query, limit=limit, users=users, nonce=nonce
+        )
 
     #  Runnable
 
@@ -319,19 +315,11 @@ class MQBot(
         await self._event_manager.dispatch(self._event_factory.deserialize_started_event())
 
     def _on_pipeline(self, shard_id: int, event_name: str, payload: bytes, /) -> None:
-        try:
-            shard = self._shards[shard_id]
-        except KeyError:
-            shard = self._shards[shard_id] = self._make_shard(shard_id)
-
+        shard = self._orchestrator.remote_shards[shard_id]
         self._event_manager.consume_pipeline_event(event_name, shard, payload)
 
     def _on_subbed(self, shard_id: int, event_name: str, payload: bytes, /) -> None:
-        try:
-            shard = self._shards[shard_id]
-        except KeyError:
-            shard = self._shards[shard_id] = self._make_shard(shard_id)
-
+        shard = self._orchestrator.remote_shards[shard_id]
         self._event_manager.consume_subbed_event(event_name, shard, payload)
 
     # hikari.api.EventManager

@@ -179,7 +179,7 @@ async fn handle_events(
             };
 
             let message = match message {
-                Ok(message) => { message },
+                Ok(message) => message,
                 // TODO: handle the shard being disconnected properly
                 // the server needs to be informed of this!!!
                 Err(source) => break, // TODO: log
