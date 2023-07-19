@@ -238,7 +238,7 @@ class MQBot(
         activity: hikari.UndefinedNoneOr[hikari.Activity] = hikari.UNDEFINED,
         afk: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
     ) -> None:
-        raise NotImplementedError
+        await self._orchestrator.update_presence(status=status, idle_since=idle_since, activity=activity, afk=afk)
 
     async def update_voice_state(
         self,
@@ -248,7 +248,7 @@ class MQBot(
         self_mute: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
         self_deaf: hikari.UndefinedOr[bool] = hikari.UNDEFINED,
     ) -> None:
-        raise NotImplementedError
+        await self._orchestrator.update_voice_state(guild, channel, self_mute=self_mute, self_deaf=self_deaf)
 
     async def request_guild_members(
         self,
@@ -260,7 +260,9 @@ class MQBot(
         users: hikari.UndefinedOr[hikari.SnowflakeishSequence[hikari.User]] = hikari.UNDEFINED,
         nonce: hikari.UndefinedOr[str] = hikari.UNDEFINED,
     ) -> None:
-        raise NotImplementedError
+        await self._orchestrator.request_guild_members(
+            guild, include_presences=include_presences, query=query, limit=limit, users=users, nonce=nonce
+        )
 
     #  Runnable
 
