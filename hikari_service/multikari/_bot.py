@@ -209,9 +209,9 @@ class MQBot(
             return float("nan")
 
         latancies = [
-            s.heartbeat_latency
-            for s in self._orchestrator.remote_shards.values()
-            if not math.isnan(s.heartbeat_latency)
+            shard.heartbeat_latency
+            for shard in self._orchestrator.remote_shards.values()
+            if not math.isnan(shard.heartbeat_latency)
         ]
         return sum(latancies) / len(latancies) if latancies else float("nan")
 
