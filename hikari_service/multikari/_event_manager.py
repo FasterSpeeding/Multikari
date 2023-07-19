@@ -47,7 +47,7 @@ if typing.TYPE_CHECKING:
     from hikari.api import event_manager as event_manager_api
     from typing_extensions import Self
 
-    from . import _receivers
+    from . import _receivers  # pyright: ignore[reportPrivateUsage]
 
     _ConverterSig = collections.Callable[[hikari.api.GatewayShard, dict[str, typing.Any]], hikari.Event]
 
