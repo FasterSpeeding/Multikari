@@ -33,6 +33,12 @@ use std::time::{Duration, Instant};
 
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
+use tonic::metadata::MetadataValue;
+use tonic::transport::channel::ClientTlsConfig;
+use tonic::transport::Certificate;
+use tonic::Request;
 use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
 use twilight_model::gateway::payload::incoming::Ready;
 use twilight_model::gateway::payload::outgoing::{request_guild_members, update_presence, update_voice_state};
@@ -55,7 +61,7 @@ fn try_get_int_variable(name: &str) -> Option<u64> {
 }
 
 
-pub fn setup() {
+fn setup() {
     let dotenv_result = dotenv::dotenv();
     simple_logger::init_with_env().expect("Failed to set up logger");
 
@@ -81,18 +87,50 @@ async fn main() {
             _ => panic!("Invalid INTENTS value in env variables"),
         };
 
+    let orchestrator_cert = match utility::try_get_env_variable("ORCHESTRATOR_CA_CERT") {
+        Some(path) => {
+            let mut buffer = Vec::new();
+            File::open(path)
+                .await
+                .expect("Couldn't read orchestrator CA cert")
+                .read_to_end(&mut buffer)
+                .await
+                .expect("Couldn't read orchestrator CA cert");
+
+            Some(ClientTlsConfig::new().ca_certificate(Certificate::from_pem(&buffer)))
+        }
+        None => None,
+    };
+
     let sender = senders::zmq::ZmqSender::new();
     let url = tonic::transport::Uri::from_str(&url).unwrap();
-    let channel = tonic::transport::Channel::builder(url)
-        .connect()
-        .await
-        .expect("Filed to connect to orchestrator");
 
-    // TODO: TLS
+    let mut channel = tonic::transport::Channel::builder(url);
+    if let Some(orchestrator_cert) = orchestrator_cert {
+        channel = channel
+            .tls_config(orchestrator_cert)
+            .expect("Failed to load orchestrator CA cert");
+    };
+    let channel = channel.connect().await.expect("Fa1iled to connect to orchestrator");
+    let auth_hash = hex::encode(
+        nacl::scrypt(
+            token.as_bytes(),
+            token.rsplit('.').last().unwrap().as_bytes(),
+            11, // Log 2048
+            8,
+            1,
+            64,
+            &|_| {},
+        )
+        .unwrap(),
+    );
+    let auth_header = MetadataValue::from_str(&("Bearer ".to_string() + &auth_hash)).unwrap();
+    let client = orchestrator_client::OrchestratorClient::with_interceptor(channel, move |mut req: Request<_>| {
+        req.metadata_mut().insert("authorization", auth_header.clone());
+        Ok(req)
+    });
 
-    let client = orchestrator_client::OrchestratorClient::new(channel);
     let mut joins: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-
     for _ in 0..shard_count {
         let mut client = client.clone();
         let sender = sender.clone();
