@@ -75,7 +75,6 @@ class MQBot(
         "_is_alive",
         "_is_closing",
         "_join_event",
-        "_manager_url",
         "_me",
         "_orchestrator",
         "_proxy_settings",
@@ -91,6 +90,7 @@ class MQBot(
         token: str,
         /,
         *,
+        ca_cert: bytes | None = None,
         http_settings: typing.Optional[hikari.impl.HTTPSettings] = None,
         log_level: typing.Union[str, int, None] = logging.INFO,
         max_rate_limit: float = 300.0,
@@ -111,9 +111,8 @@ class MQBot(
         self._intents = hikari.Intents.NONE
         self._is_alive = False
         self._is_closing = False
-        self._manager_url = manager_url
         self._me: typing.Optional[hikari.OwnUser] = None
-        self._orchestrator = hikari_orchestrator.Client()
+        self._orchestrator = hikari_orchestrator.Client(token, manager_url, ca_cert=ca_cert)
         self._receiver = receiver
 
         self._http_settings = http_settings or hikari.impl.HTTPSettings()
@@ -144,9 +143,11 @@ class MQBot(
         cls,
         pipeline_url: str,
         publish_url: str,
+        manager_url: str,
         token: str,
         /,
         *,
+        ca_cert: bytes | None = None,
         http_settings: typing.Optional[hikari.impl.HTTPSettings] = None,
         log_level: typing.Union[str, int, None] = logging.INFO,
         max_rate_limit: float = 300.0,
@@ -156,7 +157,9 @@ class MQBot(
     ) -> Self:
         return cls(
             _receivers.ZmqReceiver(pipeline_url, publish_url),
+            manager_url,
             token,
+            ca_cert=ca_cert,
             http_settings=http_settings,
             log_level=log_level,
             max_rate_limit=max_rate_limit,
@@ -279,6 +282,7 @@ class MQBot(
         await self._receiver.disconnect()
         await self._voice.close()
         await self._event_manager.dispatch(self._event_factory.deserialize_stopped_event())
+        await self._orchestrator.stop()
         await self._rest.close()
         self._is_alive = False
         self._is_closing = False
@@ -310,6 +314,7 @@ class MQBot(
         self._is_alive = True
         self._rest.start()
         self._voice.start()
+        await self._orchestrator.start()
         await self._event_manager.dispatch(self._event_factory.deserialize_starting_event())
         await self._receiver.connect(self._on_pipeline, self._on_subbed)
         await self._event_manager.dispatch(self._event_factory.deserialize_started_event())
