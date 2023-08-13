@@ -11,11 +11,19 @@ async-stream = "0.3"
 async-trait = "0.1"
 dotenv = "0.15.0"
 futures = "0.3.28"
+hex = "0.4"
+hyper = "0.14"
+hyper-openssl = "0.9"
+http = "0.2"
 log = "0.4"
+nacl = "0.5"
+openssl = "0.10"
 prost = "0.11.9"
 prost-types = "0.11.9"
 serde_json = "1"
 simple_logger = "4.2.0"
+tonic-openssl = "0.2"
+tower = "0.4"
 twilight-gateway = "0.15"
 twilight-model = "0.15"
 
@@ -24,11 +32,11 @@ features = ["zmq-vendored"]
 version = "0.3"  #  Obviously needs ZMQ to be installed
 
 [dependencies.tokio]
-features = ["macros", "rt-multi-thread"]
+features = ["fs", "io-util", "macros", "rt-multi-thread"]
 version = "1.29.1"
 
 [dependencies.tonic]
-features = ["channel", "default"]
+features = ["channel", "default", "tls"]
 version = "0.9.2"
 
 [build-dependencies]

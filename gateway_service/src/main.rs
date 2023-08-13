@@ -1,3 +1,4 @@
+use std::error::Error;
 // BSD 3-Clause License
 //
 // Copyright (c) 2021-2023, Lucina
@@ -6,16 +7,14 @@
 // Redistribution and use in source and binary forms, with or without
 // modification, are permitted provided that the following conditions are met:
 //
-// * Redistributions of source code must retain the above copyright notice, this
-//   list of conditions and the following disclaimer.
+// * Redistributions of source code must retain the above copyright notice, this list of conditions and the
+//   following disclaimer.
 //
-// * Redistributions in binary form must reproduce the above copyright notice,
-//   this list of conditions and the following disclaimer in the documentation
-//   and/or other materials provided with the distribution.
+// * Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the
+//   following disclaimer in the documentation and/or other materials provided with the distribution.
 //
-// * Neither the name of the copyright holder nor the names of its contributors
-//   may be used to endorse or promote products derived from this software
-//   without specific prior written permission.
+// * Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote
+//   products derived from this software without specific prior written permission.
 //
 // THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
 // AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
@@ -33,6 +32,12 @@ use std::time::{Duration, Instant};
 
 use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
+use hyper::client::ResponseFuture;
+use tokio::fs::File;
+use tokio::io::AsyncReadExt;
+use tonic::metadata::MetadataValue;
+use tonic::Request;
+use tower::util::ServiceFn;
 use twilight_model::gateway::event::gateway::GatewayEventDeserializer;
 use twilight_model::gateway::payload::incoming::Ready;
 use twilight_model::gateway::payload::outgoing::{request_guild_members, update_presence, update_voice_state};
@@ -40,7 +45,13 @@ use twilight_model::gateway::presence::{Activity, ActivityType, Status};
 use twilight_model::gateway::OpCode;
 use twilight_model::id::Id;
 mod senders;
+use hyper::client::connect::HttpConnector;
+use hyper::{Client, Uri};
+use hyper_openssl::HttpsConnector;
+use openssl::ssl::{SslConnector, SslMethod};
+use openssl::x509::X509;
 use senders::Sender;
+use tonic_openssl::ALPN_H2_WIRE;
 use twilight_gateway::{CloseFrame, Intents};
 
 mod utility;
@@ -55,13 +66,50 @@ fn try_get_int_variable(name: &str) -> Option<u64> {
 }
 
 
-pub fn setup() {
+fn setup() {
     let dotenv_result = dotenv::dotenv();
     simple_logger::init_with_env().expect("Failed to set up logger");
 
     if let Err(error) = dotenv_result {
         log::info!("Couldn't load .env file: {}", error);
     }
+}
+
+// Openssl is used here instead of Rustls since it's easier to use self-signed
+// CA certs with.
+async fn _tls_client(
+    url: Uri,
+) -> Result<ServiceFn<impl Fn(hyper::Request<tonic::body::BoxBody>) -> ResponseFuture>, Box<dyn Error>> {
+    let mut http = HttpConnector::new();
+    http.enforce_http(false);
+
+    let mut connector = SslConnector::builder(SslMethod::tls())?;
+
+    if let Some(path) = utility::try_get_env_variable("ORCHESTRATOR_CA_CERT") {
+        let mut buffer = Vec::new();
+        File::open(path)
+            .await
+            .expect("Couldn't read orchestrator CA cert")
+            .read_to_end(&mut buffer)
+            .await
+            .expect("Couldn't read orchestrator CA cert");
+
+        let cert = X509::from_pem(&buffer).unwrap();
+        connector.cert_store_mut().add_cert(cert)?;
+        connector.set_alpn_protos(ALPN_H2_WIRE)?;
+    };
+
+    let hyper = Client::builder()
+        .http2_only(true)
+        .build(HttpsConnector::with_connector(http, connector)?);
+
+    Ok(tower::service_fn(move |mut req: hyper::Request<_>| {
+        let mut url_parts = url.clone().into_parts();
+        url_parts.path_and_query = req.uri().path_and_query().cloned();
+        *req.uri_mut() = Uri::from_parts(url_parts).unwrap();
+
+        hyper.request(req)
+    }))
 }
 
 #[tokio::main(flavor = "multi_thread")]
@@ -73,6 +121,7 @@ async fn main() {
     let shard_total = try_get_int_variable("SHARD_TOTAL").unwrap_or(1);
 
     let url = utility::get_env_variable("ORCHESTRATOR_URL");
+    let url = tonic::transport::Uri::from_str(&url).unwrap();
     let token = utility::get_env_variable("DISCORD_TOKEN");
     let intents =
         match utility::try_get_env_variable("DISCORD_INTENTS").map(|v| u64::from_str(&v).map(Intents::from_bits)) {
@@ -81,20 +130,31 @@ async fn main() {
             _ => panic!("Invalid INTENTS value in env variables"),
         };
 
+    let auth_hash = hex::encode(
+        nacl::scrypt(
+            token.as_bytes(),
+            token.rsplit('.').last().unwrap().as_bytes(),
+            11, // Log 2048
+            8,
+            1,
+            64,
+            &|_| {},
+        )
+        .unwrap(),
+    );
+    let auth_header = MetadataValue::from_str(&("Bearer ".to_string() + &auth_hash)).unwrap();
+
     let sender = senders::zmq::ZmqSender::new();
-    let url = tonic::transport::Uri::from_str(&url).unwrap();
-    let channel = tonic::transport::Channel::builder(url)
-        .connect()
-        .await
-        .expect("Filed to connect to orchestrator");
-
-    // TODO: TLS
-
-    let client = orchestrator_client::OrchestratorClient::new(channel);
     let mut joins: Vec<tokio::task::JoinHandle<()>> = Vec::new();
-
     for _ in 0..shard_count {
-        let mut client = client.clone();
+        let auth_header = auth_header.clone();
+        let channel = _tls_client(url.clone()).await.unwrap();
+        let mut client =
+            orchestrator_client::OrchestratorClient::with_interceptor(channel, move |mut req: Request<_>| {
+                req.metadata_mut().insert("authorization", auth_header.clone());
+                Ok(req)
+            });
+
         let sender = sender.clone();
         let token = token.clone();
         joins.push(tokio::spawn(async move {
